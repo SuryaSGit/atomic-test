@@ -37,10 +37,11 @@ random → beat skill-0 SF → climb skill levels / movetime → approach full s
 - Login node (`ssh <netid>@cc-login1.campuscluster.illinois.edu`, VPN off-campus)
   has **no GPU** — build & submit there; run on nodes.
 - Partition choice for this workload:
-  - **`IllinoisComputes-GPU` / `sridhar-ic` — H200, 72h, no preemption** → the
-    main training run (`atomic_az.slurm`). Long, uninterrupted.
-  - `scavenger` / `campusclusterusers` — any GPU incl H200, 24h, **preemptible**
-    → only if you add `--requeue` and rely on checkpoint resume.
+  - **`scavenger` / `campusclusterusers` — any GPU incl H200, 24h, preemptible**
+    → the main training run (`atomic_az.slurm`). Safe because `--requeue` +
+    resume-aware training continue from the latest checkpoint after preemption.
+  - `IllinoisComputes-GPU` / `sridhar-ic` — H200, 72h, no preemption →
+    no-preemption alternative (swap the 3 header lines, drop `--requeue`).
   - `secondary` / `campusclusterusers` — ≤80GB GPU, 4h, fast → smoke test & eval
     (`smoke_test.slurm`).
 - One-time: `mkdir -p /u/$USER/scratch/logs` (SLURM won't create log dirs).
@@ -80,17 +81,24 @@ sbatch /u/$USER/scratch/atomic_az/smoke_test.slurm   # trains a tiny net, plays 
 Confirm it trains, checkpoints, and the checkpoint plays vs random before
 spending H200 hours.
 
-## 3. Train (main run)
+## 3. Train (main run — scavenger, preemptible)
 
 ```bash
 sbatch /u/$USER/scratch/atomic_az/atomic_az.slurm
 ```
+Runs on **scavenger** (any GPU incl H200, 24h, preemptible). Preemption is safe:
+`--requeue` re-runs the job and `train_atomic_az.sh` **resumes from the latest
+checkpoint** in the stable `RUN_DIR=$SCRATCH/atomic_az/run_main` — the torch-AZ
+example resumes when handed a positional `config.json`, and starts fresh only
+when given `--flags`. Keep `checkpoint_freq` modest so little is lost per
+preemption.
+
 Chess-scale hyperparameters (ResNet 256×20, 300 sims/move, replay 2^20,
 `--devices=/gpu:0`, `actors≈#cores`). Checkpoints (`checkpoint-<step>`) land in
-`RUN_DIR=$SCRATCH/atomic_az/run_main`. The run dir is stable so a chained job can
-continue it; for >72h use `sbatch --dependency=afterany:<jobid> atomic_az.slurm`
-(verify the torch-AZ actually resumes from `path` — if not, treat each job as a
-fresh run and prefer the 72h no-preempt partition). Watch progress:
+`RUN_DIR`. After a clean (non-preempted) 24h, chain the next window with
+`sbatch --dependency=afterany:<jobid> atomic_az.slurm` (also resumes).
+No-preemption alternative: `IllinoisComputes-GPU`/`sridhar-ic` (72h) per the
+`.slurm` header comments, dropping `--requeue`. Watch progress:
 
 ```bash
 squeue --me
