@@ -1,0 +1,12 @@
+# Build artifacts / run outputs
+*.o
+*.out
+*.log
+run_*/
+smoke/
+smoke_cpu/
+logs/
+checkpoint-*/
+# libtorch / local binaries
+libtorch/
+*.zip
