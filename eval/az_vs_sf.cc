@@ -11,7 +11,7 @@
 // Usage:
 //   az_vs_sf --az_path=/path/to/run --az_checkpoint=-1 \
 //            --sf_path=/usr/bin/fairy-stockfish --games=40 \
-//            --sf_movetime=200 --sf_skill=20 --az_sims=400 --device=/gpu:0
+//            --sf_movetime=200 --sf_skill=20 --az_sims=400 --device=/cuda:0
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -33,7 +33,7 @@
 ABSL_FLAG(std::string, az_path, "", "Directory of the AZ run (has vpnet.pb).");
 ABSL_FLAG(std::string, az_graph_def, "vpnet.pb", "Graph def filename.");
 ABSL_FLAG(int, az_checkpoint, -1, "Checkpoint step (-1 = most recent).");
-ABSL_FLAG(std::string, device, "/gpu:0", "Torch device for inference.");
+ABSL_FLAG(std::string, device, "/cuda:0", "Torch device for inference.");
 ABSL_FLAG(int, az_sims, 400, "MCTS simulations for the AZ bot.");
 ABSL_FLAG(std::string, sf_path, "/usr/bin/fairy-stockfish", "Fairy-SF binary.");
 ABSL_FLAG(int, sf_movetime, 200, "Fairy-Stockfish ms per move.");

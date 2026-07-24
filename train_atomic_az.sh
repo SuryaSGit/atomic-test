@@ -31,7 +31,7 @@ else
     --nn_model=resnet \
     --nn_width=256 \
     --nn_depth=20 \
-    --devices=/gpu:0 \
+    --devices=/cuda:0 \
     --learning_rate=0.0002 \
     --weight_decay=0.0001 \
     --train_batch_size=2048 \

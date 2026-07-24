@@ -27,7 +27,7 @@ nvidia-smi
 "${BUILD}/examples/alpha_zero_torch_example" \
   --game=atomic_chess --path="${RUN}" \
   --nn_model=resnet --nn_width=64 --nn_depth=4 \
-  --devices=/gpu:0 --actors=6 --evaluators=1 \
+  --devices=/cuda:0 --actors=6 --evaluators=1 \
   --max_simulations=50 --train_batch_size=256 \
   --replay_buffer_size=16384 --checkpoint_freq=10 \
   --max_steps=30

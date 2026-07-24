@@ -117,7 +117,7 @@ when given `--flags`. Keep `checkpoint_freq` modest so little is lost per
 preemption.
 
 Chess-scale hyperparameters (ResNet 256×20, 300 sims/move, replay 2^20,
-`--devices=/gpu:0`, `actors≈#cores`). Checkpoints (`checkpoint-<step>`) land in
+`--devices=/cuda:0`, `actors≈#cores`). Checkpoints (`checkpoint-<step>`) land in
 `RUN_DIR`. After a clean (non-preempted) 24h, chain the next window with
 `sbatch --dependency=afterany:<jobid> atomic_az.slurm` (also resumes).
 No-preemption alternative: `IllinoisComputes-GPU`/`sridhar-ic` (72h) per the
@@ -149,7 +149,7 @@ cp eval/az_vs_sf.cc open_spiel/examples/
 make -j az_vs_sf
 ./examples/az_vs_sf --az_path=/u/$USER/scratch/atomic_az/run_main --az_checkpoint=-1 \
     --sf_path=/u/$USER/scratch/Fairy-Stockfish/src/stockfish \
-    --games=40 --sf_skill=0 --sf_movetime=100 --device=/gpu:0
+    --games=40 --sf_skill=0 --sf_movetime=100 --device=/cuda:0
 ```
 Run eval on the **secondary** queue (short, 1 GPU). Climb the ladder as the
 agent improves: `--sf_skill` 0→20, then raise `--sf_movetime`. Milestones:
