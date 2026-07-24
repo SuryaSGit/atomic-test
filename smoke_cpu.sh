@@ -14,6 +14,11 @@
 #       set BUILD to your local build dir.
 set -uo pipefail
 
+# The libtorch we ship is a CUDA build, so its .so needs the CUDA runtime libs
+# on the path even for a /cpu:0 run. Load them if the module system is present
+# (harmless on a machine without a GPU -- torch just reports CUDA unavailable).
+module load cuda/12.8 2>/dev/null || true
+
 SCRATCH="/u/${USER}/scratch"
 BUILD="${OPEN_SPIEL_BUILD:-$SCRATCH/open_spiel/build}"
 RUN="${RUN_DIR:-$SCRATCH/atomic_az/smoke_cpu}"
