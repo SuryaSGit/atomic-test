@@ -19,7 +19,7 @@ export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
 SCRATCH="/u/${USER}/scratch"
 BUILD="${SCRATCH}/open_spiel/build"
 RUN="${SCRATCH}/atomic_az/smoke"
-export LD_LIBRARY_PATH="${SCRATCH}/open_spiel/open_spiel/libtorch/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${SCRATCH}/open_spiel/open_spiel/libtorch/libtorch/lib:${LD_LIBRARY_PATH:-}"
 mkdir -p "${RUN}" "${SCRATCH}/logs"
 nvidia-smi
 

@@ -49,23 +49,31 @@ random → beat skill-0 SF → climb skill levels / movetime → approach full s
 ## 1. Build OpenSpiel with CUDA LibTorch (on a login node)
 
 ```bash
-cd /u/$USER/scratch && git clone https://github.com/<you>/open_spiel.git
-cd open_spiel
+cd /u/$USER/scratch
+git clone https://github.com/SuryaSGit/open_spiel.git
+cd open_spiel && git checkout add-atomic-chess
 module load cuda/12.8
-# In scripts/global_variables.sh set:
-#   OPEN_SPIEL_BUILD_WITH_LIBTORCH="ON"
-#   OPEN_SPIEL_BUILD_WITH_LIBNOP="ON"
-#   OPEN_SPIEL_BUILD_WITH_LIBTORCH_DOWNLOAD_URL=<CUDA cu12x cxx11-ABI libtorch URL>
-./install.sh                       # downloads libtorch (-> open_spiel/libtorch) + libnop
+export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+
+# CRITICAL: OpenSpiel reads these from the ENVIRONMENT, not from -D flags
+# (its CMake does `set(VAR $ENV{VAR})`, which overrides any -DVAR=ON). Export
+# them before BOTH install.sh and cmake, or the AZ target is silently skipped.
+export OPEN_SPIEL_BUILD_WITH_LIBTORCH=ON
+export OPEN_SPIEL_BUILD_WITH_LIBNOP=ON
+export OPEN_SPIEL_BUILD_WITH_LIBTORCH_DOWNLOAD_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.4.1%2Bcu121.zip"
+
+./install.sh                        # provisions open_spiel/open_spiel/libtorch/libtorch + libnop
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DOPEN_SPIEL_BUILD_WITH_LIBTORCH=ON \
-      -DOPEN_SPIEL_BUILD_WITH_LIBNOP=ON ../open_spiel
-make -j alpha_zero_torch_example alpha_zero_torch_game_example
+cmake -DCMAKE_BUILD_TYPE=Release ../open_spiel   # MUST print "OPEN_SPIEL_BUILD_WITH_LIBTORCH: ON" and find Torch
+make -j"$(nproc)" alpha_zero_torch_example alpha_zero_torch_game_example
 ```
 
-Match the libtorch CUDA build to `cuda/12.8` (cu121/cu124 cxx11-ABI). Then copy
-this folder's scripts to `$SCRATCH/atomic_az/`. The `atomic_chess` game is
-already registered (code+tests in `open_spiel/games/atomic_chess/`).
+If cmake does *not* print `OPEN_SPIEL_BUILD_WITH_LIBTORCH: ON`, the env var
+wasn't exported in that shell — fix and re-run in a **fresh** `build/` dir. If
+`find_package(Torch)` errors, libtorch isn't at
+`open_spiel/open_spiel/libtorch/libtorch/` — re-run `./install.sh` with the env
+vars exported. Match the libtorch build to `cuda/12.8` (cu121/cu124 cxx11-ABI).
+The `atomic_chess` game is already on the `add-atomic-chess` branch.
 
 Also build Fairy-Stockfish once (for evaluation):
 ```bash

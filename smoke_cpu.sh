@@ -17,7 +17,7 @@ set -uo pipefail
 SCRATCH="/u/${USER}/scratch"
 BUILD="${OPEN_SPIEL_BUILD:-$SCRATCH/open_spiel/build}"
 RUN="${RUN_DIR:-$SCRATCH/atomic_az/smoke_cpu}"
-export LD_LIBRARY_PATH="$(dirname "${BUILD}")/open_spiel/libtorch/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$(dirname "${BUILD}")/open_spiel/libtorch/libtorch/lib:${LD_LIBRARY_PATH:-}"
 mkdir -p "${RUN}"
 
 echo ">>> tiny CPU training (a few steps) on atomic_chess ..."

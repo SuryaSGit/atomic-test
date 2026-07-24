@@ -25,7 +25,7 @@ SCRATCH="/u/${USER}/scratch"
 export OPEN_SPIEL_BUILD="${SCRATCH}/open_spiel/build"
 # STABLE run dir -> a requeued (preempted) job resumes the SAME run.
 export RUN_DIR="${SCRATCH}/atomic_az/run_main"
-export LD_LIBRARY_PATH="${SCRATCH}/open_spiel/open_spiel/libtorch/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${SCRATCH}/open_spiel/open_spiel/libtorch/libtorch/lib:${LD_LIBRARY_PATH:-}"
 mkdir -p "${RUN_DIR}" "${SCRATCH}/logs"
 
 nvidia-smi
