@@ -68,6 +68,21 @@ cmake -DCMAKE_BUILD_TYPE=Release ../open_spiel   # MUST print "OPEN_SPIEL_BUILD_
 make -j"$(nproc)" alpha_zero_torch_example alpha_zero_torch_game_example
 ```
 
+**Shortcut:** `bash cluster_setup.sh` does all of the above (export env, run
+install.sh, create the no-op wrappers below, configure, build).
+
+Two ICC gotchas this handles:
+- `install.sh` **exits nonzero** on ICC (it assumes Debian/`apt-get`); that's
+  benign — deps are already fetched and OS packages come from `module`s.
+- The top CMakeLists does `add_subdirectory(libnop)` / `add_subdirectory(libtorch)`,
+  but those wrapper `CMakeLists.txt` are **not committed anywhere and install.sh
+  never writes them**. Create no-op ones (the parent CMakeLists does the real
+  include/`find_package` work, and nothing depends on targets from these dirs):
+  ```bash
+  printf '# header-only; include dir set by parent\n'      > open_spiel/libnop/CMakeLists.txt
+  printf '# libtorch via find_package(Torch) in parent\n'  > open_spiel/libtorch/CMakeLists.txt
+  ```
+
 If cmake does *not* print `OPEN_SPIEL_BUILD_WITH_LIBTORCH: ON`, the env var
 wasn't exported in that shell — fix and re-run in a **fresh** `build/` dir. If
 `find_package(Torch)` errors, libtorch isn't at
