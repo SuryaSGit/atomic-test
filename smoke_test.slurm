@@ -24,13 +24,16 @@ mkdir -p "${RUN}" "${SCRATCH}/logs"
 nvidia-smi
 
 # Tiny + short: just prove self-play -> train -> checkpoint works on atomic.
+# Small train_batch_size so the FIRST learn step logs to stdout within seconds
+# (AZ is silent on stdout until the buffer reaches train_batch_size states;
+# per-game self-play progress goes to log-actor-*.txt in the run dir).
 "${BUILD}/examples/alpha_zero_torch_example" \
   --game=atomic_chess --path="${RUN}" \
   --nn_model=resnet --nn_width=64 --nn_depth=4 \
   --devices=/cuda:0 --actors=6 --evaluators=1 \
-  --max_simulations=50 --train_batch_size=256 \
-  --replay_buffer_size=16384 --checkpoint_freq=10 \
-  --max_steps=30
+  --max_simulations=50 --train_batch_size=32 \
+  --replay_buffer_size=2048 --checkpoint_freq=5 \
+  --max_steps=20
 
 echo "=== checkpoint plays? (AZ vs random, 2 games) ==="
 "${BUILD}/examples/alpha_zero_torch_game_example" \
