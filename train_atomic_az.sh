@@ -53,9 +53,23 @@ else
   #       = 300/948/3000/9486. Levels 5-6 (95k/300k rollout sims) took 3-13 min
   #       per game and ~85% of evaluator CPU for no useful signal -- and the real
   #       yardstick is Fairy-Stockfish, not a rollout bot.
-  #   actors  Thread budget: actors + 1 evaluator + 1 learner + 2 inference
-  #       threads = NPROC. Actors run MCTS on CPU with only batched inference on
-  #       the GPU, so cores are the binding constraint on data rate, not the GPU.
+  #   actors=2*NPROC  DELIBERATELY oversubscribed. Measured on run_main: 14
+  #       actors produced 22s per game = 1.45s per move = ~4.8ms per simulation.
+  #       Tree descent over a 300-node tree is microseconds, so an actor spends
+  #       ~99% of each simulation BLOCKED waiting on the inference queue, leaving
+  #       its core idle. Sizing actors to cores therefore wastes most of the
+  #       machine. More actors also means bigger inference batches, because
+  #       alpha_zero.cc:545-547 clamps inference_batch_size to
+  #       actors+evaluators -- with 14 actors the effective batch was 16, not the
+  #       64 requested, so the H200 was running ~2,900 evals/s when it can do
+  #       orders of magnitude more. Tune via batch_size.avg in learner.jsonl:
+  #       if it sits well below inference_batch_size, raise actors further.
+  #   inference_threads=4  More concurrent GPU dispatches to overlap with the
+  #       actors' blocking waits. Clamped to (1+actors+evaluators)/2, so safe.
+  #   inference_cache=2^20  Atomic openings repeat heavily (identical 7-ply games
+  #       appeared twice in the same evaluator log), so hit rate should be high
+  #       and every hit skips a GPU round trip. ~1GB of the 128G ask. The cache
+  #       is cleared each learn step (alpha_zero.cc:475-481) since weights moved.
   #
   # WARNING: nn_width, nn_depth and replay_buffer_size can only be changed in a
   # FRESH RUN_DIR. The first two would desynchronise vpnet.pb from the existing
@@ -72,8 +86,8 @@ else
     --weight_decay=0.0001 \
     --train_batch_size=2048 \
     --inference_batch_size=64 \
-    --inference_threads=2 \
-    --inference_cache=262144 \
+    --inference_threads=4 \
+    --inference_cache=1048576 \
     --replay_buffer_size=262144 \
     --replay_buffer_reuse=4 \
     --max_simulations=300 \
@@ -84,7 +98,7 @@ else
     --temperature_drop=6 \
     --cutoff_probability=0.8 \
     --cutoff_value=0.95 \
-    --actors="$(( NPROC > 6 ? NPROC - 4 : 2 ))" \
+    --actors="$(( NPROC > 6 ? NPROC * 2 : 4 ))" \
     --evaluators=1 \
     --eval_levels=4 \
     --checkpoint_freq=25 \

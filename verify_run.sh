@@ -72,7 +72,33 @@ print("\n".join(rows[-int(sys.argv[1]):]))' "$1" "$2" 2>/dev/null
 }
 
 echo "=== verifying ${RUN_DIR} ==="
-[[ -d "$RUN_DIR" ]] || { echo "no such run dir"; exit 1; }
+if [[ ! -d "$RUN_DIR" ]]; then
+  echo "no such run dir."
+  parent=$(dirname "$RUN_DIR")
+  if [[ -d "$parent" ]]; then
+    echo
+    echo "Run directories that DO exist under ${parent}:"
+    found=0
+    for d in "$parent"/*/; do
+      [[ -d "$d" ]] || continue
+      found=1
+      printf '  %-28s %8s  %s\n' "$(basename "$d")" \
+        "$(du -sh "$d" 2>/dev/null | cut -f1)" \
+        "$([[ -f "$d/config.json" ]] && echo 'has config.json' || echo 'no config.json')"
+    done
+    [[ $found -eq 1 ]] || echo "  (none)"
+    echo
+    echo "If the job is writing to a different directory than expected, the"
+    echo "cluster copy of atomic_az.slurm is probably older than your local one"
+    echo "(RUN_DIR was changed to run_v2). Check with:"
+    echo "  git -C \$(dirname \$(dirname \"$RUN_DIR\")) log --oneline -1"
+    echo "  grep -n 'RUN_DIR=' \$(dirname \$(dirname \"$RUN_DIR\"))/atomic_az.slurm"
+    echo "Or point this script at the directory in use:  bash verify_run.sh <dir>"
+  else
+    echo "Parent ${parent} does not exist either -- has the job started? squeue --me"
+  fi
+  exit 1
+fi
 
 # --- 1. Did it start fresh, in the right place? --------------------------------
 echo
@@ -147,6 +173,52 @@ if [[ -s "$LJ" ]]; then
 else
   note "no learn step yet. Expected within ~20 min of launch; if it is much"
   note "longer, replay_buffer_size did not take effect (check section [2])."
+fi
+
+# --- 3b. Throughput diagnostics: is the GPU actually being fed? ----------------
+echo
+echo "[3b] throughput (baseline from run_main: 9.7 states/s, 14 actors, 24M net)"
+if [[ -s "$LJ" ]]; then
+  TMP2="${TMPDIR:-/tmp}/verify_run.$$"
+  tail -1 "$LJ" > "$TMP2.thr"
+  sps=$(cfg_get states_per_s "$TMP2.thr")
+  spsa=$(cfg_get states_per_s_actor "$TMP2.thr")
+  bavg=$(cfg_get batch_size.avg "$TMP2.thr")
+  hit=$(cfg_get cache.hit_rate "$TMP2.thr")
+  want_batch=$(cfg_get inference_batch_size "$CFG")
+
+  if [[ -n "$sps" ]]; then
+    echo "  ....  states_per_s = ${sps} (per actor: ${spsa:-?})"
+    if awk "BEGIN{exit !($sps > 9.7)}"; then
+      ok "faster than the old config's 9.7 states/s"
+    else
+      bad "no faster than the old config -- investigate before running for hours"
+    fi
+  fi
+
+  # The key tuning signal. inference_batch_size is clamped to actors+evaluators
+  # (alpha_zero.cc:545-547), and a mean batch far below it means actors are
+  # spending their time blocked rather than queuing work -> add more actors.
+  if [[ -n "$bavg" && -n "$want_batch" ]]; then
+    echo "  ....  mean inference batch = ${bavg} / ${want_batch} requested"
+    if awk "BEGIN{exit !($bavg < $want_batch * 0.5)}"; then
+      note "batches under half full -> raise --actors (they are latency-bound,"
+      note "not CPU-bound; 2x cores is the current setting)"
+    else
+      ok "inference batches filling well"
+    fi
+  fi
+
+  if [[ -n "$hit" ]]; then
+    printf '  ....  inference cache hit rate = %s\n' "$hit"
+    if awk "BEGIN{exit !($hit < 0.2)}"; then
+      note "low hit rate; --inference_cache may not be helping much"
+    else
+      ok "cache is absorbing a useful share of evaluations"
+    fi
+  fi
+else
+  note "no learner record yet"
 fi
 
 # --- 4. Are the actors actually generating games? -----------------------------
