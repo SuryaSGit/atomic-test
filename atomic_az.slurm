@@ -8,7 +8,11 @@
 #SBATCH --partition=scavenger
 #SBATCH --account=campusclusterusers
 #SBATCH --gres=gpu:H200:1
-#SBATCH --cpus-per-task=16
+# Self-play is CPU-bound: actors run MCTS on CPU and use the GPU only for
+# batched inference, so cores -- not the H200 -- cap the data rate. 32 is the
+# sweet spot for one GPU; drop back to 16 if the scavenger queue is long, or
+# raise it if the node allows (train_atomic_az.sh scales --actors from nproc).
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --requeue
@@ -24,7 +28,14 @@ export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
 SCRATCH="/u/${USER}/scratch"
 export OPEN_SPIEL_BUILD="${SCRATCH}/open_spiel/build"
 # STABLE run dir -> a requeued (preempted) job resumes the SAME run.
-export RUN_DIR="${SCRATCH}/atomic_az/run_main"
+#
+# NOTE: run_v2, not run_main. A resume replays RUN_DIR/config.json and ignores
+# the flags in train_atomic_az.sh entirely, so the retuned hyperparameters can
+# only take effect in a directory that has no config.json yet. run_main also
+# holds a 256x20 vpnet.pb and a replay buffer sized 2^20, either of which would
+# hard-fail or silently override the new settings. Bump to run_v3 etc. for any
+# future change to nn_width/nn_depth/replay_buffer_size.
+export RUN_DIR="${SCRATCH}/atomic_az/run_v2"
 export LD_LIBRARY_PATH="${SCRATCH}/open_spiel/open_spiel/libtorch/libtorch/lib:${LD_LIBRARY_PATH:-}"
 mkdir -p "${RUN_DIR}" "${SCRATCH}/logs"
 

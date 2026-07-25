@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /Users/surya/.claude/projects/-Users-surya && grep -l \"atomic_az\" *.jsonl 2>/dev/null)",
+      "Read(//Users/surya/.claude/projects/-Users-surya/**)"
+    ]
+  }
+}
