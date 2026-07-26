@@ -9,10 +9,15 @@
 #SBATCH --job-name=atomic_pretrain
 #SBATCH --partition=secondary
 #SBATCH --account=campusclusterusers
-#SBATCH --gres=gpu:H100:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-#SBATCH --time=04:00:00
+# Any GPU, and a small footprint, so this backfills quickly. Naming a specific
+# model (gpu:H100:1) left it pending behind reserved nodes. Data loading is
+# single-threaded, so extra cores buy nothing.
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+# Sized for a 1-epoch validation run. A full 7-epoch pass on ~18M positions
+# needs longer:  sbatch --time=04:00:00 pretrain/pretrain_secondary.slurm
+#SBATCH --time=01:00:00
 #SBATCH --output=/u/%u/scratch/logs/%x-%j.out
 #SBATCH --error=/u/%u/scratch/logs/%x-%j.out
 
