@@ -26,21 +26,9 @@
 
 #include "open_spiel/spiel.h"
 
-namespace atomic_az {
+#include "sample.h"
 
-// One training example. Mirrors VPNetModel::TrainInputs, minus the torch types.
-struct Sample {
-  std::vector<open_spiel::Action> legal_actions;
-  std::vector<float> observation;
-  // The policy target is one-hot on the move the human actually played.
-  open_spiel::Action played_action;
-  // IMPORTANT: always player 0's outcome, never the mover's. The value head is
-  // player-0-relative -- VPNetEvaluator::Evaluate returns {v, -v} for players
-  // {0, 1}, and the learner feeds returns[0] for every state in a trajectory.
-  // In OpenSpiel chess (and therefore atomic_chess) player 0 is BLACK and
-  // player 1 is WHITE, so a "1-0" PGN result yields value = -1.
-  double value;
-};
+namespace atomic_az {
 
 struct Filter {
   // Applied to both players; 0 disables. The MultiAra thesis used the top 10th
@@ -242,7 +230,7 @@ inline GameStatus GameToSamples(const open_spiel::Game& game,
       return GameStatus::kParseFailed;
     }
     pending.push_back(Sample{std::move(legal), state->ObservationTensor(),
-                             chosen, p0_value});
+                             OneHot(chosen), p0_value});
     state->ApplyAction(chosen);
   }
 

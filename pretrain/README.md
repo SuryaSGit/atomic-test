@@ -24,14 +24,73 @@ Atomic was the weakest variant for self-play RL in that study — its RL run
 stalled after 26 model updates and no later model could beat update 25. That
 makes the supervised starting point *more* important here, not less.
 
+## Two teachers
+
+The trainer accepts either data source, or both at once into the same shuffle
+buffer:
+
+- **Human games** (`--pgn`) — lichess atomic at Elo ≥ 1900, the MultiAra recipe.
+- **Fairy-Stockfish distillation** (`--sf_tsv`) — generated locally by
+  `sf_label`. For atomic this is the **stronger teacher**: Fairy-Stockfish is
+  far above 1900-Elo human play, the data is free to generate on CPU, and the
+  same approach produced Fairy-SF's own atomic NNUE (~500 Elo).
+
+Distillation caps out at the teacher, so it gets you *to* Fairy-Stockfish
+parity — the Phase 4 milestone — and RL has to do any surpassing.
+
 ## Files
 
 | file | needs LibTorch | what it does |
 |---|---|---|
-| `pgn_atomic.h` | no | streaming PGN reader → training samples |
-| `pgn_atomic_test.cc` | no | tests for the above; run this first |
+| `sample.h` | no | the `Sample` type every reader emits |
+| `pgn_atomic.h` | no | streaming PGN reader → samples |
+| `sf_data.h` | no | sf_label `.tsv` reader → samples |
+| `pgn_atomic_test.cc` | no | tests for the PGN reader |
+| `sf_data_test.cc` | no | tests for value/policy targets and sign conventions |
+| `sf_label.cc` | no | **generates** the distillation dataset (CPU, laptop-friendly) |
+| `sf_data_check.cc` | no | replays a dataset to validate it |
+| `run_sf_label_mac.sh` | — | builds + shards `sf_label` on macOS |
 | `az_pretrain.cc` | **yes** | trains `VPNetModel`, writes `checkpoint--1.pt` |
 | `bootstrap_pretrained_run.sh` | — | wires the pretrained net into an RL run |
+
+## Distillation flow
+
+```bash
+# 1. Generate on any CPU machine (measured: 530 pos/s on an M4, 49 bytes each)
+bash pretrain/run_sf_label_mac.sh            # ~10h -> ~18M positions, ~900MB
+
+# 2. Validate (drop the last line if the run is still going)
+$OUT/sf_data_check $OUT/atomic.*.tsv         # expect DATASET OK
+
+# 3. Ship to the cluster and train
+rsync -av $OUT/atomic.*.tsv cc-login1:/u/$USER/scratch/data/
+az_pretrain --path=$RUN_DIR --sf_tsv=$(ls -m /path/atomic.*.tsv | tr -d ' \n') \
+            --val_sf_tsv=/path/holdout.tsv --sf_lambda=0.7 --sf_policy_temp=100
+```
+
+### Target construction
+
+```
+value  = sf_lambda * tanh(stm_cp / sf_cp_scale) + (1 - sf_lambda) * game_result
+policy = softmax(multipv_cp / sf_policy_temp)      # or one-hot when temp = 0
+```
+
+- `--sf_lambda=0.7` follows the Fairy-SF NNUE convention. Pure search scores
+  inherit the teacher's biases; pure outcomes are noisy.
+- `--sf_cp_scale=400` is the chess default and **should be calibrated** for
+  atomic, where swings are larger. Empirically, from a dataset:
+  ```bash
+  grep -hv '^#' atomic.0.tsv | awk -F'\t' '{r=$1; n=split($2,p," ");
+    for(i=1;i<=n;i++){split(p[i],f,"|"); if(f[2]!=""){b=int(f[2]/200)*200;
+    s[b]+=r; c[b]++}}} END{for(b in s) printf "%6d %7.3f %d\n", b, s[b]/c[b], c[b]}' \
+    | sort -n
+  ```
+  Pick the scale where `tanh(cp/scale)` best tracks the mean result per bucket.
+- `--sf_policy_temp=100` gives soft targets across the MultiPV list, which
+  carry more information per position than one-hot. Requires `--multipv > 1`
+  at generation time.
+- `--sf_max_abs_cp` optionally drops mate-scored positions (~16% of the data)
+  if you would rather spend capacity on unresolved play.
 
 ## 1. Verify the PGN reader (any machine, no GPU)
 

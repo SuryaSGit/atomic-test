@@ -46,6 +46,7 @@
 #include "open_spiel/utils/file.h"
 
 #include "pgn_atomic.h"
+#include "sf_data.h"
 
 ABSL_FLAG(std::string, path, "", "Run directory: holds vpnet.pb + checkpoints.");
 ABSL_FLAG(std::string, graph_def, "vpnet.pb", "Model config filename.");
@@ -55,6 +56,18 @@ ABSL_FLAG(std::string, game, "atomic_chess", "OpenSpiel game name.");
 ABSL_FLAG(std::string, pgn, "",
           "Comma-separated plain-text PGN files. Use \"-\" for stdin "
           "(forces epochs=1), e.g. zstdcat *.pgn.zst | az_pretrain --pgn=-");
+ABSL_FLAG(std::string, sf_tsv, "",
+          "Comma-separated sf_label .tsv files (Fairy-Stockfish distillation). "
+          "May be combined with --pgn; both feed the same shuffle buffer.");
+ABSL_FLAG(std::string, val_sf_tsv, "", "Held-out sf_label .tsv for validation.");
+ABSL_FLAG(double, sf_lambda, 0.7,
+          "value = lambda*tanh(cp/sf_cp_scale) + (1-lambda)*game_result.");
+ABSL_FLAG(double, sf_cp_scale, 400.0,
+          "Centipawns mapped to |value| ~ 0.76. Calibrate for atomic.");
+ABSL_FLAG(double, sf_policy_temp, 0.0,
+          "Softmax temperature (cp) over MultiPV. 0 = one-hot on SF's best.");
+ABSL_FLAG(int, sf_max_abs_cp, 0,
+          "Drop positions with |cp| above this (0 = keep all).");
 ABSL_FLAG(std::string, val_pgn, "",
           "Held-out PGN for validation. Strongly recommended: the MultiAra "
           "study found 7 epochs generalised better than 30.");
@@ -107,7 +120,7 @@ az::VPNetModel::TrainInputs ToTrainInputs(atomic_az::Sample&& s) {
   // these sparse (action, probability) pairs into a dense masked target.
   return az::VPNetModel::TrainInputs{std::move(s.legal_actions),
                                      std::move(s.observation),
-                                     {{s.played_action, 1.0}}, s.value};
+                                     std::move(s.policy), s.value};
 }
 
 struct ValStats {
@@ -149,7 +162,12 @@ ValStats Validate(az::VPNetModel* model,
       for (const auto& [action, prob] : outputs[j].policy) {
         if (prob > best_p) { best_p = prob; best = action; }
       }
-      if (best == s.played_action) top1_ok += 1;
+      open_spiel::Action target = open_spiel::kInvalidAction;
+      double target_p = -1.0;
+      for (const auto& [action, prob] : s.policy) {
+        if (prob > target_p) { target_p = prob; target = action; }
+      }
+      if (best == target) top1_ok += 1;
       out.n += 1;
     }
   }
@@ -181,12 +199,20 @@ int main(int argc, char** argv) {
     return 1;
   }
   std::vector<std::string> pgn_files = SplitFiles(absl::GetFlag(FLAGS_pgn));
-  if (pgn_files.empty()) {
-    std::cerr << "--pgn is required (comma-separated files, or \"-\")."
+  std::vector<std::string> sf_files = SplitFiles(absl::GetFlag(FLAGS_sf_tsv));
+  if (pgn_files.empty() && sf_files.empty()) {
+    std::cerr << "Need --pgn (human games) and/or --sf_tsv (Stockfish "
+                 "distillation). Both feed the same shuffle buffer."
               << std::endl;
     return 1;
   }
   const bool from_stdin = (pgn_files.size() == 1 && pgn_files[0] == "-");
+
+  atomic_az::SfOptions sf_opt;
+  sf_opt.lambda = absl::GetFlag(FLAGS_sf_lambda);
+  sf_opt.cp_scale = absl::GetFlag(FLAGS_sf_cp_scale);
+  sf_opt.policy_temp = absl::GetFlag(FLAGS_sf_policy_temp);
+  sf_opt.max_abs_cp = absl::GetFlag(FLAGS_sf_max_abs_cp);
 
   int epochs = absl::GetFlag(FLAGS_epochs);
   if (from_stdin && epochs != 1) {
@@ -249,9 +275,25 @@ int main(int argc, char** argv) {
         });
     std::cout << "[pretrain] validation: " << val.size() << " positions ("
               << s.ToString() << ")" << std::endl;
-  } else {
-    std::cerr << "[pretrain] WARNING: no --val_pgn; you will not be able to "
-                 "tell when the net starts overfitting." << std::endl;
+  }
+  const std::string val_tsv = absl::GetFlag(FLAGS_val_sf_tsv);
+  if (!val_tsv.empty()) {
+    const int cap = absl::GetFlag(FLAGS_val_samples);
+    std::ifstream in(val_tsv);
+    if (!in) {
+      std::cerr << "[pretrain] cannot open --val_sf_tsv " << val_tsv << std::endl;
+      return 1;
+    }
+    atomic_az::SfStats s = atomic_az::ReadSfTsv(
+        in, *game, sf_opt, [&](atomic_az::Sample&& x) {
+          if (static_cast<int>(val.size()) < cap) val.push_back(std::move(x));
+        });
+    std::cout << "[pretrain] validation (sf): " << s.ToString() << std::endl;
+  }
+  if (val.empty()) {
+    std::cerr << "[pretrain] WARNING: no validation set (--val_pgn / "
+                 "--val_sf_tsv); you will not be able to tell when the net "
+                 "starts overfitting." << std::endl;
   }
 
   open_spiel::CircularBuffer<az::VPNetModel::TrainInputs> buffer(
@@ -322,6 +364,21 @@ int main(int argc, char** argv) {
       total.skipped_termination += s.skipped_termination;
       total.skipped_short += s.skipped_short;
       total.skipped_parse += s.skipped_parse;
+    }
+    for (const std::string& f : sf_files) {
+      std::ifstream in(f);
+      if (!in) {
+        std::cerr << "[pretrain] cannot open " << f << std::endl;
+        return 1;
+      }
+      atomic_az::SfStats s = atomic_az::ReadSfTsv(
+          in, *game, sf_opt, on_sample, absl::GetFlag(FLAGS_max_games));
+      std::cout << "[pretrain] epoch " << epoch << " file " << f << ": "
+                << s.ToString() << std::endl;
+      total.games_seen += s.lines;
+      total.games_used += s.games_ok;
+      total.samples += s.samples;
+      total.skipped_parse += s.games_bad;
     }
     // A checkpoint per epoch, so a run interrupted mid-schedule is still usable
     // and so you can pick the epoch with the best validation numbers.

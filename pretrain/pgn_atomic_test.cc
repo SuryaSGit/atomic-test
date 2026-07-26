@@ -202,15 +202,18 @@ void TestCastlingAndShape(const open_spiel::Game& game) {
   for (const Sample& smp : samples) {
     SPIEL_CHECK_EQ(smp.observation.size(), obs_size);
     SPIEL_CHECK_FALSE(smp.legal_actions.empty());
-    SPIEL_CHECK_NE(smp.played_action, kInvalidAction);
+    SPIEL_CHECK_EQ(smp.policy.size(), 1);
+    const Action played = smp.policy[0].first;
+    SPIEL_CHECK_EQ(smp.policy[0].second, 1.0);
+    SPIEL_CHECK_NE(played, kInvalidAction);
     // The policy target must be reachable under the legal mask, else the
     // masked softmax would put zero probability on the target.
     bool found = false;
     for (Action a : smp.legal_actions) {
-      if (a == smp.played_action) { found = true; break; }
+      if (a == played) { found = true; break; }
     }
     SPIEL_CHECK_TRUE(found);
-    SPIEL_CHECK_LT(smp.played_action, game.NumDistinctActions());
+    SPIEL_CHECK_LT(played, game.NumDistinctActions());
   }
   std::cout << "  castling parsed, 22 samples, obs size " << obs_size
             << ", targets inside legal mask OK" << std::endl;
