@@ -143,7 +143,8 @@ build it *inside* the OpenSpiel tree:
 cp eval/az_vs_sf.cc open_spiel/examples/
 # add to open_spiel/examples/CMakeLists.txt, guarded like the other torch examples:
 #   if (${OPEN_SPIEL_BUILD_WITH_LIBTORCH})
-#     add_executable(az_vs_sf az_vs_sf.cc ${OPEN_SPIEL_OBJECTS})
+#     add_executable(az_vs_sf az_vs_sf.cc ${OPEN_SPIEL_OBJECTS}
+#                    $<TARGET_OBJECTS:alpha_zero_torch>)
 #     target_link_libraries(az_vs_sf ${TORCH_LIBRARIES})
 #   endif()
 make -j az_vs_sf

@@ -77,8 +77,10 @@ policy = softmax(multipv_cp / sf_policy_temp)      # or one-hot when temp = 0
 
 - `--sf_lambda=0.7` follows the Fairy-SF NNUE convention. Pure search scores
   inherit the teacher's biases; pure outcomes are noisy.
-- `--sf_cp_scale=400` is the chess default and **should be calibrated** for
-  atomic, where swings are larger. Empirically, from a dataset:
+- `--sf_cp_scale=1620` is calibrated for atomic by fitting `tanh(cp/K)` to
+  observed outcomes over 579k positions. The chess default of 400 saturates:
+  `tanh(1000/400)=0.99` where the real win rate at +1000cp is 0.56. Recalibrate
+  if the generator config changes:
   ```bash
   grep -hv '^#' atomic.0.tsv | awk -F'\t' '{r=$1; n=split($2,p," ");
     for(i=1;i<=n;i++){split(p[i],f,"|"); if(f[2]!=""){b=int(f[2]/200)*200;
@@ -116,14 +118,18 @@ illegal move contributes **zero** samples rather than a mislabelled prefix.
 ## 2. Build the trainer (cluster, LibTorch on)
 
 ```bash
-cp pretrain/az_pretrain.cc pretrain/pgn_atomic.h $SCRATCH/open_spiel/open_spiel/examples/
+# az_pretrain.cc includes all three headers, so copy them together
+cp pretrain/{az_pretrain.cc,pgn_atomic.h,sf_data.h,sample.h} \
+   $SCRATCH/open_spiel/open_spiel/examples/
 ```
 
 Add to `open_spiel/examples/CMakeLists.txt`:
 
 ```cmake
 if (${OPEN_SPIEL_BUILD_WITH_LIBTORCH})
-  add_executable(az_pretrain az_pretrain.cc ${OPEN_SPIEL_OBJECTS})
+  add_executable(az_pretrain az_pretrain.cc
+                ${OPEN_SPIEL_OBJECTS}
+                $<TARGET_OBJECTS:alpha_zero_torch>)
   target_link_libraries(az_pretrain ${TORCH_LIBRARIES})
 endif()
 ```
