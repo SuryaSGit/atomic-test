@@ -37,6 +37,19 @@ mkdir -p "$RUN_DIR" "$SCRATCH/logs"
 # positions, which would leak because positions within a game are correlated.
 HOLDOUT="${HOLDOUT:-7}"
 EPOCHS="${EPOCHS:-7}"          # MultiAra: 7 generalised better than 30
+# Chaining, for when the epochs do not fit inside the partition walltime:
+#   job 1: EPOCHS=2
+#   job 2: EPOCHS=2 INIT_CHECKPOINT=-1 EPOCH_OFFSET=2, submitted with
+#          sbatch --dependency=afterok:<job1>
+# INIT_CHECKPOINT=-1 resumes from checkpoint--1 AND its Adam state, so the
+# continuation is seamless. EPOCH_OFFSET keeps per-epoch checkpoints unique.
+INIT_CHECKPOINT="${INIT_CHECKPOINT:--2}"   # -2 = fresh weights
+EPOCH_OFFSET="${EPOCH_OFFSET:-0}"
+# Positions between learn steps = batch_size/reuse. Raising reuse buys more
+# gradient steps from the same parsed data -- useful because the single-threaded
+# reader takes a large share of wall time -- at the cost of seeing each position
+# more often.
+REUSE="${REUSE:-4}"
 
 # Calibrated on 579k labelled positions from this dataset by fitting
 # tanh(cp/K) to the observed outcome. Atomic swings far exceed chess: the
@@ -79,9 +92,11 @@ fi
   --sf_cp_scale="$CP_SCALE" \
   --sf_policy_temp="$POLICY_TEMP" \
   --epochs="$EPOCHS" \
+  --init_checkpoint="$INIT_CHECKPOINT" \
+  --epoch_offset="$EPOCH_OFFSET" \
   --batch_size=1024 \
   --buffer_size=262144 \
-  --reuse=4 \
+  --reuse="$REUSE" \
   --log_every=100 \
   --val_every=1000 \
   --save_every=1000 \

@@ -1,0 +1,4 @@
+Standard Stockfish cannot play atomic chess.
+So I'm training an AlphaZero agent that can — on one H200, chasing parity with Fairy-Stockfish (the reference atomic engine).
+
+atomic_az. Training run · 2026.

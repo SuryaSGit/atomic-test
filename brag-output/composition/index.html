@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>atomic_az — research trailer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="assets/audio-data/music-audio.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0A0A0F;
+      }
+      body { font-family: "Instrument Serif", "EB Garamond", serif; color: #F5F1E8; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+      .serif { font-family: "Instrument Serif", "EB Garamond", serif; }
+
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0A0A0F;
+      }
+
+      /* Full-bleed base background layer so producer never renders black */
+      .stage-bg {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at 50% 55%, #12111A 0%, #0A0A0F 65%);
+        z-index: 0;
+      }
+
+      /* -------- Scene 1: The constraint -------- */
+      #scene1 {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        z-index: 3;
+        background: #0A0A0F;
+      }
+      #scene1-glow {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 1400px;
+        height: 700px;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(ellipse at center, rgba(255, 122, 43, 0.14) 0%, rgba(255, 122, 43, 0) 65%);
+        filter: blur(30px);
+        opacity: 0.6;
+        will-change: opacity, transform;
+      }
+      #scene1-line {
+        position: relative;
+        font-family: "Instrument Serif", "EB Garamond", serif;
+        font-weight: 400;
+        font-size: 108px;
+        line-height: 1.12;
+        color: #F5F1E8;
+        text-align: center;
+        max-width: 1500px;
+        letter-spacing: -0.5px;
+      }
+
+      /* -------- Scene 2: Atomic -------- */
+      #scene2 {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        z-index: 4;
+      }
+      #scene2-stage {
+        position: relative;
+        width: 900px;
+        height: 900px;
+        display: grid;
+        place-items: center;
+      }
+      #board-glow {
+        position: absolute;
+        left: 50%;
+        top: 46%;
+        width: 900px;
+        height: 900px;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(circle at center, rgba(255, 122, 43, 0) 0%, rgba(255, 122, 43, 0) 100%);
+        opacity: 0.7;
+        pointer-events: none;
+      }
+      #board {
+        position: relative;
+        width: 700px;
+        height: 700px;
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        grid-template-rows: repeat(5, 1fr);
+        gap: 0;
+        border: 2px solid rgba(78, 200, 255, 0.08);
+        border-radius: 6px;
+        box-shadow: 0 40px 100px rgba(0,0,0,0.6);
+      }
+      .sq {
+        position: relative;
+        display: grid;
+        place-items: center;
+        font-family: "Instrument Serif", serif;
+        font-size: 96px;
+        color: #F5F1E8;
+      }
+      .sq.dark { background: #1C1D22; }
+      .sq.light { background: #2A2C33; }
+      .sq .piece {
+        position: relative;
+        display: inline-block;
+        width: 100%;
+        height: 100%;
+        line-height: 140px;
+        text-align: center;
+        will-change: transform, opacity;
+      }
+      .sq .piece.white { color: #F5F1E8; }
+      .sq .piece.black { color: #0A0A0F; text-shadow: 0 0 2px #F5F1E8; }
+      #knight {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 140px;
+        height: 140px;
+        font-family: "Instrument Serif", serif;
+        font-size: 96px;
+        color: #F5F1E8;
+        display: grid;
+        place-items: center;
+        z-index: 5;
+        will-change: transform;
+      }
+      /* Particles */
+      #particles {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 700px;
+        height: 700px;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        z-index: 6;
+      }
+      .particle {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 14px;
+        height: 14px;
+        margin-left: -7px;
+        margin-top: -7px;
+        background: #FF7A2B;
+        border-radius: 50%;
+        opacity: 0;
+        box-shadow: 0 0 20px 4px rgba(255, 122, 43, 0.7);
+        will-change: transform, opacity;
+      }
+      #scene2-caption {
+        position: absolute;
+        left: 50%;
+        bottom: 90px;
+        transform: translateX(-50%);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 30px;
+        color: #9AA0A6;
+        letter-spacing: 1.5px;
+        white-space: nowrap;
+        opacity: 0;
+        will-change: opacity, transform;
+      }
+
+      /* -------- Scene 3: The rig -------- */
+      #scene3 {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        z-index: 5;
+      }
+      #spec-card {
+        position: relative;
+        width: 1000px;
+        padding: 90px 70px 60px 70px;
+        border: 1px solid rgba(78, 200, 255, 0.35);
+        border-radius: 6px;
+        background: rgba(10, 10, 15, 0.85);
+        box-shadow: 0 0 60px rgba(78, 200, 255, 0.05), inset 0 0 40px rgba(78, 200, 255, 0.02);
+        will-change: box-shadow;
+      }
+      #spec-label {
+        position: absolute;
+        top: 34px;
+        left: 70px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 16px;
+        letter-spacing: 4px;
+        color: #4EC8FF;
+        opacity: 0.75;
+      }
+      .spec-line {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 34px;
+        line-height: 1.55;
+        color: #F5F1E8;
+        white-space: nowrap;
+        opacity: 0;
+        will-change: transform, opacity;
+      }
+      .spec-line .muted { color: #9AA0A6; }
+      .spec-line .accent { color: #4EC8FF; }
+
+      /* -------- Scene 4: The ladder -------- */
+      #scene4 {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        background: linear-gradient(180deg, #0A0A0F 0%, #12111A 100%);
+      }
+      #scene4-wash {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at 50% 60%, rgba(78, 200, 255, 0.05) 0%, rgba(78, 200, 255, 0) 70%);
+        opacity: 0.5;
+        will-change: opacity;
+      }
+      #ladder {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 1500px;
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+      #ladder-label {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 18px;
+        letter-spacing: 6px;
+        color: #9AA0A6;
+        margin-bottom: 30px;
+        opacity: 0;
+        will-change: opacity, transform;
+      }
+      .rung {
+        display: grid;
+        grid-template-columns: 90px 1fr 260px;
+        align-items: center;
+        gap: 40px;
+        padding: 18px 32px;
+        background: rgba(10, 10, 15, 0.4);
+        border-left: 3px solid rgba(78, 200, 255, 0.35);
+        border-radius: 3px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 30px;
+        opacity: 0;
+        transform-origin: left center;
+        will-change: transform, opacity, background, box-shadow;
+      }
+      .rung .rid { color: #4EC8FF; font-weight: 500; }
+      .rung .name { color: #F5F1E8; font-family: "Instrument Serif", serif; font-size: 34px; }
+      .rung .target { color: #9AA0A6; font-size: 26px; text-align: right; }
+      .rung.milestone { border-left-color: #FF7A2B; }
+      .rung.milestone .parity { color: #FF7A2B; font-weight: 700; letter-spacing: 2px; }
+      #r5-glow {
+        position: absolute;
+        left: 0;
+        right: 0;
+        pointer-events: none;
+        height: 120px;
+        background: radial-gradient(ellipse at center, rgba(255, 122, 43, 0.35) 0%, rgba(255, 122, 43, 0) 70%);
+        opacity: 0;
+        filter: blur(14px);
+        z-index: -1;
+        will-change: opacity;
+      }
+
+      /* -------- Scene 5: The name -------- */
+      #scene5 {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        z-index: 7;
+        background: #0A0A0F;
+      }
+      #scene5-halo {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 1400px;
+        height: 700px;
+        transform: translate(-50%, -50%);
+        background: radial-gradient(ellipse at center, rgba(255, 122, 43, 0.15) 0%, rgba(255, 122, 43, 0) 65%);
+        opacity: 0;
+        filter: blur(30px);
+        will-change: opacity, transform;
+      }
+      #run-label {
+        position: absolute;
+        top: 240px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        letter-spacing: 6px;
+        color: #9AA0A6;
+        opacity: 0;
+        will-change: opacity;
+      }
+      #title-block {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 34px;
+      }
+      #title-main {
+        font-family: "Instrument Serif", "EB Garamond", serif;
+        font-style: italic;
+        font-size: 200px;
+        letter-spacing: -3px;
+        color: #F5F1E8;
+        opacity: 0;
+        line-height: 1;
+        will-change: transform, opacity, text-shadow;
+      }
+      #title-sub {
+        font-family: "Instrument Serif", serif;
+        font-size: 30px;
+        color: #9AA0A6;
+        opacity: 0;
+        max-width: 1200px;
+        text-align: center;
+        line-height: 1.4;
+        will-change: opacity, transform;
+      }
+
+      /* Fade-to-black overlay */
+      #fade-black {
+        position: absolute;
+        inset: 0;
+        background: #000;
+        opacity: 0;
+        z-index: 20;
+        pointer-events: none;
+        will-change: opacity;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="23"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="stage-bg" aria-hidden="true"></div>
+
+      <!-- ============================================================ -->
+      <!-- Scene 1 — The constraint  (0.0 – 4.0s)                       -->
+      <!-- ============================================================ -->
+      <section id="scene1" class="clip" data-start="0" data-duration="4.1" data-track-index="1">
+        <div id="scene1-glow" aria-hidden="true"></div>
+        <div id="scene1-line" class="serif">Standard Stockfish cannot play atomic chess.</div>
+      </section>
+
+      <!-- ============================================================ -->
+      <!-- Scene 2 — Atomic  (4.0 – 8.5s)                                -->
+      <!-- beat-locked: 8.74s (transition tail lands on strong beat)     -->
+      <!-- ============================================================ -->
+      <section id="scene2" class="clip" data-start="3.9" data-duration="4.7" data-track-index="2">
+        <div id="scene2-stage">
+          <div id="board-glow" aria-hidden="true"></div>
+          <div id="board">
+            <!-- row 0 -->
+            <div class="sq dark"></div>
+            <div class="sq light"></div>
+            <div class="sq dark"></div>
+            <div class="sq light"></div>
+            <div class="sq dark"></div>
+            <!-- row 1 -->
+            <div class="sq light"></div>
+            <div class="sq dark"><span class="piece white" id="p-r1c1">&#9823;</span></div>
+            <div class="sq light"><span class="piece black" id="p-r1c2">&#9820;</span></div>
+            <div class="sq dark"><span class="piece white" id="p-r1c3">&#9823;</span></div>
+            <div class="sq light"></div>
+            <!-- row 2 -->
+            <div class="sq dark"></div>
+            <div class="sq light"><span class="piece black" id="p-r2c1">&#9821;</span></div>
+            <div class="sq dark" id="target-square"><span class="piece white" id="target-pawn">&#9823;</span></div>
+            <div class="sq light"><span class="piece white" id="p-r2c3">&#9822;</span></div>
+            <div class="sq dark"></div>
+            <!-- row 3 -->
+            <div class="sq light"></div>
+            <div class="sq dark"><span class="piece white" id="p-r3c1">&#9823;</span></div>
+            <div class="sq light"><span class="piece black" id="p-r3c2">&#9822;</span></div>
+            <div class="sq dark"><span class="piece black" id="p-r3c3">&#9823;</span></div>
+            <div class="sq light"></div>
+            <!-- row 4 -->
+            <div class="sq dark"></div>
+            <div class="sq light"></div>
+            <div class="sq dark"></div>
+            <div class="sq light"></div>
+            <div class="sq dark"></div>
+          </div>
+          <div id="knight" aria-hidden="true" data-layout-allow-overlap="true">&#9822;</div>
+          <div id="particles" aria-hidden="true">
+            <!-- 24 particles built via loop -->
+          </div>
+        </div>
+        <div id="scene2-caption" class="mono">capture &rarr; explode &rarr; no undo</div>
+      </section>
+
+      <!-- ============================================================ -->
+      <!-- Scene 3 — The rig  (8.5 – 13.5s)                              -->
+      <!-- beat-locked: 8.74s hard cut aligns with strong beat           -->
+      <!-- ============================================================ -->
+      <section id="scene3" class="clip" data-start="8.5" data-duration="4.9" data-track-index="1">
+        <div id="spec-card">
+          <div id="spec-label" class="mono">THE STACK</div>
+          <div class="spec-line" id="sl-0">AlphaZero <span class="muted">&middot;</span> self-play RL</div>
+          <div class="spec-line" id="sl-1">ResNet <span class="accent">128 &times; 10</span>  <span class="muted">&asymp; 6M params</span></div>
+          <div class="spec-line" id="sl-2"><span class="accent">300</span> sims / move</div>
+          <div class="spec-line" id="sl-3">replay <span class="accent">2^18</span> <span class="muted">&middot;</span> reuse 4</div>
+          <div class="spec-line" id="sl-4">one <span class="accent">H200</span> <span class="muted">&middot;</span> scavenger <span class="muted">&middot;</span> 24h</div>
+          <div class="spec-line" id="sl-5"><span class="muted">--requeue &middot; resume-safe</span></div>
+        </div>
+      </section>
+
+      <!-- ============================================================ -->
+      <!-- Scene 4 — The ladder  (13.3 – 18.8s)                          -->
+      <!-- beat-grid: rungs at 13.11 / 14.20 / 15.29 / 16.38 / 17.47 / 18.56s -->
+      <!-- beat-locked: 18.56s R5 landing (strong beat)                  -->
+      <!-- ============================================================ -->
+      <section id="scene4" class="clip" data-start="13.3" data-duration="5.5" data-track-index="2">
+        <div id="scene4-wash" aria-hidden="true"></div>
+        <div id="ladder">
+          <div id="ladder-label" class="mono">STRENGTH LADDER</div>
+          <div class="rung" id="rung-0">
+            <span class="rid">R0</span>
+            <span class="name">rollout MCTS 300 sims</span>
+            <span class="target">target &gt; 80%</span>
+          </div>
+          <div class="rung" id="rung-1">
+            <span class="rid">R1</span>
+            <span class="name">rollout MCTS 3000 sims</span>
+            <span class="target">target &gt; 60%</span>
+          </div>
+          <div class="rung" id="rung-2">
+            <span class="rid">R2</span>
+            <span class="name">Fairy-SF &middot; UCI_Elo 1400</span>
+            <span class="target">target &gt; 50%</span>
+          </div>
+          <div class="rung" id="rung-3">
+            <span class="rid">R3</span>
+            <span class="name">Fairy-SF &middot; UCI_Elo 1800</span>
+            <span class="target">target &gt; 50%</span>
+          </div>
+          <div class="rung" id="rung-4">
+            <span class="rid">R4</span>
+            <span class="name">Fairy-SF &middot; UCI_Elo 2200</span>
+            <span class="target">target &gt; 40%</span>
+          </div>
+          <div class="rung milestone" id="rung-5" style="position: relative;">
+            <div id="r5-glow" aria-hidden="true"></div>
+            <span class="rid">R5</span>
+            <span class="name">Fairy-SF full &middot; Use NNUE=false &middot; <span class="parity">PARITY</span> &mdash; MILESTONE</span>
+            <span class="target">&mdash;</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================================================ -->
+      <!-- Scene 5 — The name  (18.7 – 23.0s)                            -->
+      <!-- beat-locked: 22.93s title slam (strong beat)                  -->
+      <!-- ============================================================ -->
+      <section id="scene5" class="clip" data-start="18.7" data-duration="4.3" data-track-index="1">
+        <div id="scene5-halo" aria-hidden="true"></div>
+        <div id="run-label" class="mono">TRAINING RUN &middot; 2026</div>
+        <div id="title-block">
+          <div id="title-main" class="serif">atomic_az</div>
+          <div id="title-sub" class="serif">training an AlphaZero agent to reach parity with the reference atomic engine.</div>
+        </div>
+      </section>
+
+      <div id="fade-black" aria-hidden="true"></div>
+
+      <!-- ============================================================ -->
+      <!-- Audio                                                        -->
+      <!-- ============================================================ -->
+      <audio
+        id="bgm"
+        class="clip"
+        src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3"
+        data-start="0"
+        data-duration="23"
+        data-track-index="20"
+        data-volume="0.32"
+      ></audio>
+
+      <!-- Scene 2 explosion (~5.2s) — layered impact, one per track -->
+      <audio
+        id="sfx-explode-bell"
+        class="clip"
+        src="assets/sfx/impact/impactBell_heavy_004.ogg"
+        data-start="5.15"
+        data-duration="0.3"
+        data-track-index="21"
+        data-volume="0.55"
+      ></audio>
+      <audio
+        id="sfx-explode-glass"
+        class="clip"
+        src="assets/sfx/impact/impactGlass_heavy_002.ogg"
+        data-start="5.18"
+        data-duration="0.25"
+        data-track-index="22"
+        data-volume="0.45"
+      ></audio>
+      <audio
+        id="sfx-explode-soft"
+        class="clip"
+        src="assets/sfx/impact/impactSoft_heavy_002.ogg"
+        data-start="5.2"
+        data-duration="0.57"
+        data-track-index="23"
+        data-volume="0.7"
+      ></audio>
+
+      <!-- Scene 3 spec-card line drops on the beat grid — each on its own track -->
+      <audio id="sfx-sl-0" class="clip" src="assets/sfx/interface/drop_001.ogg"
+             data-start="8.74" data-duration="0.11" data-track-index="30" data-volume="0.42"></audio>
+      <audio id="sfx-sl-1" class="clip" src="assets/sfx/interface/drop_002.ogg"
+             data-start="9.29" data-duration="0.19" data-track-index="31" data-volume="0.34"></audio>
+      <audio id="sfx-sl-2" class="clip" src="assets/sfx/interface/drop_003.ogg"
+             data-start="9.83" data-duration="0.19" data-track-index="32" data-volume="0.34"></audio>
+      <audio id="sfx-sl-3" class="clip" src="assets/sfx/interface/drop_001.ogg"
+             data-start="10.37" data-duration="0.11" data-track-index="33" data-volume="0.34"></audio>
+      <audio id="sfx-sl-4" class="clip" src="assets/sfx/interface/drop_002.ogg"
+             data-start="10.93" data-duration="0.19" data-track-index="34" data-volume="0.34"></audio>
+      <audio id="sfx-sl-5" class="clip" src="assets/sfx/interface/drop_003.ogg"
+             data-start="11.46" data-duration="0.19" data-track-index="35" data-volume="0.42"></audio>
+
+      <!-- Scene 4 ladder rungs on the beat grid — each on its own track -->
+      <audio id="sfx-r0" class="clip" src="assets/sfx/casino/card-place-1.ogg"
+             data-start="13.11" data-duration="0.69" data-track-index="40" data-volume="0.5"></audio>
+      <audio id="sfx-r1" class="clip" src="assets/sfx/casino/card-place-2.ogg"
+             data-start="14.20" data-duration="0.46" data-track-index="41" data-volume="0.5"></audio>
+      <audio id="sfx-r2" class="clip" src="assets/sfx/casino/card-place-3.ogg"
+             data-start="15.29" data-duration="0.6" data-track-index="42" data-volume="0.5"></audio>
+      <audio id="sfx-r3" class="clip" src="assets/sfx/casino/card-place-4.ogg"
+             data-start="16.38" data-duration="0.6" data-track-index="43" data-volume="0.5"></audio>
+      <audio id="sfx-r4" class="clip" src="assets/sfx/casino/card-place-1.ogg"
+             data-start="17.47" data-duration="0.69" data-track-index="44" data-volume="0.55"></audio>
+      <audio id="sfx-r5-bell" class="clip" src="assets/sfx/impact/impactBell_heavy_003.ogg"
+             data-start="18.56" data-duration="0.65" data-track-index="45" data-volume="0.7"></audio>
+
+      <!-- Scene 5 title-slam bell at ~22.93s -->
+      <audio id="sfx-slam" class="clip" src="assets/sfx/impact/impactBell_heavy_000.ogg"
+             data-start="22.93" data-track-index="46" data-volume="0.75"></audio>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+
+      // Build particle DOM first (deterministic seeded positions — no Math.random at render time)
+      (function buildParticles() {
+        var container = document.getElementById("particles");
+        if (!container) return;
+        var N = 24;
+        for (var i = 0; i < N; i++) {
+          var el = document.createElement("div");
+          el.className = "particle";
+          el.setAttribute("data-idx", i);
+          container.appendChild(el);
+        }
+      })();
+
+      var tl = gsap.timeline({ paused: true });
+
+      // -----------------------------------------------------------
+      // Scene 1 — The constraint (0.0 – 4.0)
+      // -----------------------------------------------------------
+      tl.from("#scene1-line", { opacity: 0, y: 22, duration: 0.9, ease: "power3.out" }, 0.25);
+      // Glow gentle breath — real audio-reactive tick registered later; this is the resting motion
+      tl.fromTo(
+        "#scene1-glow",
+        { opacity: 0.35, scale: 0.94 },
+        { opacity: 0.7, scale: 1.02, duration: 1.6, ease: "sine.inOut", yoyo: true, repeat: 1 },
+        0.6,
+      );
+      // Fade the hook line out on the wipe into Scene 2
+      tl.to("#scene1-line", { opacity: 0, duration: 0.35, ease: "power2.in" }, 3.7);
+      tl.to("#scene1-glow", { opacity: 0, duration: 0.35, ease: "power2.in", overwrite: "auto" }, 3.7);
+
+      // -----------------------------------------------------------
+      // Scene 2 — Atomic (4.0 – 8.5)
+      // -----------------------------------------------------------
+      // Board fades up
+      tl.from("#board", { opacity: 0, scale: 0.94, duration: 0.55, ease: "power3.out" }, 4.0);
+      // Position the free-floating knight over row1 col2 (black knight already visible on-board is decorative;
+      // this animated knight is the one that captures — glides from row3col3 area into target square at row2col2)
+      // Board is 700x700 with 5 columns; each square is 140px. Grid origin is top-left of #board.
+      // #knight is absolutely positioned inside #scene2-stage. #board is centered inside stage (stage 900x900, board 700x700).
+      // Stage top-left→board top-left offset: (900-700)/2 = 100
+      // Target square (row 2, col 2, zero-indexed) is at (100 + 2*140, 100 + 2*140) = (380, 380).
+      // Starting square: row 3, col 3 → (100 + 3*140, 100 + 3*140) = (520, 520).
+      gsap.set("#knight", { x: 520, y: 520, opacity: 0 });
+      tl.to("#knight", { opacity: 1, duration: 0.25, ease: "power2.out" }, 4.55);
+      // Slight arc: knight moves in an L then lands on the target pawn square (~5.2s)
+      tl.to("#knight", { x: 380, y: 380, duration: 0.65, ease: "power3.inOut" }, 4.55);
+
+      // At the exact moment of capture (~5.2s), the target pawn vanishes and the capturing knight + neighbors detonate.
+      // Vanish target pawn + all 8 neighbors + capturing knight (they dissolve into embers)
+      var neighborIds = ["#p-r1c1", "#p-r1c2", "#p-r1c3", "#p-r2c1", "#target-pawn", "#p-r2c3", "#p-r3c1", "#p-r3c2", "#p-r3c3"];
+      tl.to(neighborIds.join(", "), { opacity: 0, scale: 0.35, duration: 0.35, ease: "power2.in" }, 5.15);
+      tl.to("#knight", { opacity: 0, scale: 0.4, duration: 0.3, ease: "power2.in" }, 5.2);
+
+      // Particle burst — deterministic angles seeded by index
+      (function detonateParticles() {
+        var nodes = document.querySelectorAll("#particles .particle");
+        var n = nodes.length;
+        for (var i = 0; i < n; i++) {
+          var angle = (i / n) * Math.PI * 2;
+          // Vary radius in a stable, seeded way (no Math.random at runtime)
+          var jitter = (((i * 37) % 11) - 5) / 5; // -1..1
+          var radius = 260 + jitter * 60;
+          var dx = Math.cos(angle) * radius;
+          var dy = Math.sin(angle) * radius;
+          // Vary duration slightly per particle for a natural fan
+          var dur = 0.9 + (((i * 13) % 7) / 30);
+          gsap.set(nodes[i], { x: 0, y: 0, opacity: 0, scale: 0.6 });
+          tl.to(nodes[i], { opacity: 1, scale: 1.2, duration: 0.08, ease: "power2.out" }, 5.18);
+          tl.to(
+            nodes[i],
+            { x: dx, y: dy, opacity: 0, scale: 0.2, duration: dur, ease: "power3.out" },
+            5.22,
+          );
+        }
+      })();
+
+      // Board glow blooms with the explosion, then settles
+      tl.fromTo(
+        "#board-glow",
+        { background: "radial-gradient(circle at center, rgba(255,122,43,0.7) 0%, rgba(255,122,43,0) 60%)", opacity: 0 },
+        { opacity: 1, duration: 0.15, ease: "power2.out" },
+        5.18,
+      );
+      tl.to("#board-glow", { opacity: 0.25, duration: 1.4, ease: "power2.out" }, 5.4);
+
+      // Caption fades in at 6.0s and holds
+      tl.fromTo("#scene2-caption", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.7, ease: "power2.out" }, 6.0);
+
+      // Hard cut at 8.5s — fade Scene 2 elements sharply into the darkness (Scene 3 clip takes over)
+      tl.to("#scene2-caption", { opacity: 0, duration: 0.15, ease: "power2.in" }, 8.45);
+      tl.to("#board", { opacity: 0, duration: 0.15, ease: "power2.in" }, 8.45);
+      tl.to("#board-glow", { opacity: 0, duration: 0.15, ease: "power2.in" }, 8.45);
+
+      // -----------------------------------------------------------
+      // Scene 3 — The rig (8.5 – 13.5)
+      // -----------------------------------------------------------
+      // Card entry
+      tl.from("#spec-card", { opacity: 0, y: 30, duration: 0.6, ease: "power3.out" }, 8.55);
+      tl.from("#spec-label", { opacity: 0, x: -20, duration: 0.4, ease: "power2.out" }, 8.7);
+
+      // Beat-grid line drops: 8.74, 9.29, 9.83, 10.37, 10.93, 11.46
+      var lineBeats = [8.74, 9.29, 9.83, 10.37, 10.93, 11.46];
+      for (var li = 0; li < 6; li++) {
+        tl.fromTo(
+          "#sl-" + li,
+          { opacity: 0, y: -14 },
+          { opacity: 1, y: 0, duration: 0.36, ease: "power3.out" },
+          lineBeats[li],
+        );
+      }
+
+      // Crossfade out at 13.3s
+      tl.to("#spec-card", { opacity: 0, y: -14, duration: 0.32, ease: "power2.in" }, 13.15);
+
+      // -----------------------------------------------------------
+      // Scene 4 — The ladder (13.3 – 18.8)
+      // beat-grid: rungs at 13.11 / 14.20 / 15.29 / 16.38 / 17.47 / 18.56s
+      // -----------------------------------------------------------
+      // Label + wash entry (relative to Scene 4 start at 13.3s)
+      tl.fromTo("#ladder-label", { opacity: 0, y: -8 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 13.35);
+
+      var rungBeats = [13.5, 14.30, 15.35, 16.42, 17.50, 18.56];
+      for (var ri = 0; ri < 6; ri++) {
+        var sel = "#rung-" + ri;
+        tl.fromTo(
+          sel,
+          { opacity: 0, x: -40, scale: 0.98 },
+          { opacity: 1, x: 0, scale: 1, duration: 0.45, ease: "power3.out" },
+          rungBeats[ri],
+        );
+      }
+
+      // R5 receives a bigger emphasis on the strong beat at 18.56s
+      // beat-locked: 18.56s
+      tl.fromTo(
+        "#rung-5",
+        { opacity: 0, x: -40, scale: 0.98 },
+        { opacity: 1, x: 0, scale: 1.06, duration: 0.55, ease: "back.out(1.6)" },
+        18.56,
+      );
+      tl.fromTo(
+        "#r5-glow",
+        { opacity: 0 },
+        { opacity: 1, duration: 0.25, ease: "power2.out" },
+        18.56,
+      );
+      tl.to("#r5-glow", { opacity: 0.5, duration: 0.6, ease: "power2.out" }, 18.85);
+
+      // Scene 4 → Scene 5 crossfade (0.4s)
+      tl.to("#scene4-wash", { opacity: 0, duration: 0.35, ease: "power2.in" }, 18.55);
+      tl.to("#ladder", { opacity: 0, duration: 0.35, ease: "power2.in" }, 18.55);
+
+      // -----------------------------------------------------------
+      // Scene 5 — The name (18.7 – 23.0)
+      // beat-locked: 22.93s title slam
+      // -----------------------------------------------------------
+      // Small run label appears at 19.2s
+      tl.fromTo("#run-label", { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" }, 19.2);
+
+      // Title slam: appears at 22.3s and lands its full weight ON 22.93s
+      // The slam itself IS the beat-locked moment.
+      tl.fromTo(
+        "#title-main",
+        { opacity: 0, scale: 1.6, y: -30 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.55, ease: "power4.out" },
+        22.85,
+      );
+      tl.fromTo(
+        "#scene5-halo",
+        { opacity: 0, scale: 0.9 },
+        { opacity: 1, scale: 1.05, duration: 0.5, ease: "power3.out" },
+        22.9,
+      );
+      tl.to("#scene5-halo", { opacity: 0.35, duration: 0.6, ease: "power2.out", overwrite: "auto" }, 23.0 - 0.4);
+      tl.fromTo(
+        "#title-sub",
+        { opacity: 0, y: 12 },
+        { opacity: 1, y: 0, duration: 0.55, ease: "power2.out" },
+        22.95,
+      );
+
+      // Music volume: fade in 0.6s to 0.32 (start already at 0.32; do a gentle ramp from 0)
+      tl.fromTo("#bgm", { volume: 0 }, { volume: 0.32, duration: 0.6, ease: "power1.out" }, 0.0);
+      // Music fade out from 22.3s → 23.0s
+      tl.to("#bgm", { volume: 0, duration: 0.7, ease: "power2.in" }, 22.3);
+
+      // Final gentle fade to black at very end
+      tl.to("#fade-black", { opacity: 1, duration: 0.35, ease: "power2.out" }, 22.65);
+
+      // -----------------------------------------------------------
+      // Audio-reactive breathing — subtle. Reads pre-extracted per-frame RMS
+      // and modulates: Scene 1 glow, Scene 2 board glow, Scene 4 wash, Scene 5 halo.
+      // Pre-extracted data lives in assets/audio-data/music-audio.json. It is
+      // inlined synchronously below via a <script> tag so the timeline is built
+      // deterministically without any fetch at render time.
+      // -----------------------------------------------------------
+      var AUDIO_DATA = window.__AUDIO_DATA__;
+      if (AUDIO_DATA && AUDIO_DATA.frames && AUDIO_DATA.frames.length) {
+        var fps = AUDIO_DATA.fps || 30;
+        var frames = AUDIO_DATA.frames;
+        // Only sample every 2nd frame (15fps) for the reactive modulations — smoother and cheaper.
+        for (var f = 0; f < frames.length; f += 2) {
+          (function (frame, t) {
+            tl.call(function () {
+              var rms = frame.rms || 0;
+              var bass = (frame.bands && frame.bands[0]) || 0;
+              // Scene 1 glow — RMS breathing, 0.35 baseline
+              var g1 = document.getElementById("scene1-glow");
+              if (g1 && t < 3.8) {
+                g1.style.opacity = String(0.35 + rms * 0.9);
+              }
+              // Scene 2 board glow — bass-heavy after explosion (5.2s+)
+              var bg = document.getElementById("board-glow");
+              if (bg && t > 5.4 && t < 8.4) {
+                var settled = 0.25 + bass * 0.65;
+                bg.style.opacity = String(Math.max(0.15, Math.min(0.9, settled)));
+              }
+              // Scene 4 wash — subtle RMS brighten as rungs stack (13.3 – 18.7)
+              var w = document.getElementById("scene4-wash");
+              if (w && t > 13.35 && t < 18.55) {
+                w.style.opacity = String(0.35 + rms * 0.55);
+              }
+              // Scene 5 halo — brief peak at slam
+              var halo = document.getElementById("scene5-halo");
+              if (halo && t > 22.9 && t < 23.0) {
+                halo.style.opacity = String(Math.min(1, 0.7 + rms * 0.6));
+              }
+            }, [], t);
+          })(frames[f], f / fps);
+        }
+      }
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

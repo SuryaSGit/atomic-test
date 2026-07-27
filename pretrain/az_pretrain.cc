@@ -100,6 +100,11 @@ ABSL_FLAG(int, init_checkpoint, -2,
           "Checkpoint to start from: -2 = fresh weights, -1 = latest, N = "
           "checkpoint-N. Use -1 to continue an interrupted pretraining run.");
 ABSL_FLAG(int, seed, 42, "RNG seed for batch sampling.");
+ABSL_FLAG(int, epoch_offset, 0,
+          "Added to the epoch number used for per-epoch checkpoint names. When "
+          "chaining runs to get around a walltime cap, set this to the number "
+          "of epochs already done so run 2 writes checkpoint-3,4,... instead of "
+          "overwriting run 1's checkpoint-1,2,...");
 
 // Only used when the run directory has no graph_def yet. Prefer letting
 // alpha_zero_torch_example create it (see bootstrap_pretrained_run.sh) so the
@@ -382,12 +387,13 @@ int main(int argc, char** argv) {
     }
     // A checkpoint per epoch, so a run interrupted mid-schedule is still usable
     // and so you can pick the epoch with the best validation numbers.
-    const std::string ck = model.SaveCheckpoint(epoch);
-    std::cout << "[pretrain] epoch " << epoch << " done, saved " << ck
+    const int epoch_label = epoch + absl::GetFlag(FLAGS_epoch_offset);
+    const std::string ck = model.SaveCheckpoint(epoch_label);
+    std::cout << "[pretrain] epoch " << epoch_label << " done, saved " << ck
               << std::endl;
     if (!val.empty()) {
       ValStats v = Validate(&model, val, batch_size);
-      std::cout << "[pretrain] EPOCH " << epoch << " VAL  value_mse "
+      std::cout << "[pretrain] EPOCH " << epoch_label << " VAL  value_mse "
                 << v.value_mse << "  value_sign_acc " << v.value_sign_acc
                 << "  policy_top1 " << v.policy_top1 << std::endl;
     }
