@@ -137,27 +137,49 @@ Use the stock example to pit AZ vs random/mcts:
   --az_path=$RUN_DIR --az_checkpoint=-1 --player1=az --player2=mcts
 ```
 
-**Vs Fairy-Stockfish** — `eval/az_vs_sf.cc`. It needs LibTorch, so
-build it *inside* the OpenSpiel tree:
+**Vs Fairy-Stockfish** — `eval/az_vs_sf.cc`, which needs LibTorch, so build it
+inside the OpenSpiel tree:
+
 ```bash
-cp eval/az_vs_sf.cc open_spiel/examples/
-# add to open_spiel/examples/CMakeLists.txt, guarded like the other torch examples:
+cp eval/az_vs_sf.cc eval/match.h $SCRATCH/open_spiel/open_spiel/examples/
+# add to open_spiel/examples/CMakeLists.txt, guarded like the other torch
+# examples. NOTE the alpha_zero_torch objects: ${OPEN_SPIEL_OBJECTS} alone
+# leaves every VPNetModel symbol undefined at link time.
 #   if (${OPEN_SPIEL_BUILD_WITH_LIBTORCH})
 #     add_executable(az_vs_sf az_vs_sf.cc ${OPEN_SPIEL_OBJECTS}
 #                    $<TARGET_OBJECTS:alpha_zero_torch>)
 #     target_link_libraries(az_vs_sf ${TORCH_LIBRARIES})
 #   endif()
-make -j az_vs_sf
-./examples/az_vs_sf --az_path=/u/$USER/scratch/atomic_az/run_main --az_checkpoint=-1 \
-    --sf_path=/u/$USER/scratch/Fairy-Stockfish/src/stockfish \
-    --games=40 --sf_skill=0 --sf_movetime=100 --device=/cuda:0
-```
-Run eval on the **secondary** queue (short, 1 GPU). Climb the ladder as the
-agent improves: `--sf_skill` 0→20, then raise `--sf_movetime`. Milestones:
-beat random → beat skill-0 SF (our MCTS baseline ~17%) → higher skills → full.
+make -j4 az_vs_sf
 
-`eval/sf_bridge.cc` is the **tested** MCTS-vs-Fairy-Stockfish harness (no LibTorch
-needed) — useful for calibrating Skill Level / movetime on any machine.
+./examples/az_vs_sf --az_path=$RUN_DIR --az_checkpoint=-1 \
+    --sf_path=$SCRATCH/Fairy-Stockfish/src/stockfish \
+    --games=40 --sf_nodes=10000 --az_sims=400 --device=/cuda:0
+```
+
+`--device=/cpu:0` also works and needs no GPU allocation -- slower, but enough
+for a coarse first read while the queue is busy.
+
+The harness reports **per-colour** scores with confidence intervals, plays each
+opening twice with colours swapped, sends `ucinewgame` between games, and
+excludes unfinished games rather than scoring them as draws. Those choices
+matter: atomic is strongly first-move-favoured (see `harnesses/theory_check.cc`),
+so an aggregate score can hide a 100%/0% colour split, and at n=40 the interval
+is roughly +/-15pp.
+
+**Calibrating the ladder** — `eval/sf_bridge.cc` runs the same match logic with
+plain random-rollout MCTS, so it needs no LibTorch and runs anywhere:
+
+```bash
+./sf_bridge --sf_path=/opt/homebrew/bin/fairy-stockfish \
+            --games=20 --mcts_sims=800 --sweep=100,1000,10000
+./sf_bridge --games=20 --mcts_sims=800 --elo_sweep=1350,1600,2000,2600
+```
+
+Use it to find which Stockfish setting a known-strength bot scores ~50%
+against, and aim the trained net there first. Both harnesses share
+`eval/match.h`, so running `sf_bridge` also exercises the scoring and pairing
+code that `az_vs_sf` uses.
 
 ## Notes / gotchas
 
