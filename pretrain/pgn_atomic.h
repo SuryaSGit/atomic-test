@@ -230,7 +230,7 @@ inline GameStatus GameToSamples(const open_spiel::Game& game,
       return GameStatus::kParseFailed;
     }
     pending.push_back(Sample{std::move(legal), state->ObservationTensor(),
-                             OneHot(chosen), p0_value});
+                             OneHot(chosen), p0_value, p0_value});
     state->ApplyAction(chosen);
   }
 

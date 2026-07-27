@@ -129,19 +129,22 @@ az::VPNetModel::TrainInputs ToTrainInputs(atomic_az::Sample&& s) {
 }
 
 struct ValStats {
-  double value_mse = 0;
-  double value_sign_acc = 0;  // over decisive games only
+  double value_mse = 0;        // vs the (possibly blended) training target
+  double value_sign_acc = 0;   // agreement with the target's sign
+  double result_mse = 0;       // vs the ACTUAL game outcome
+  double result_sign_acc = 0;  // did it predict the real winner?
   double policy_top1 = 0;
   int64_t n = 0;
   int64_t n_decisive = 0;
+  int64_t n_result = 0;
 };
 
 ValStats Validate(az::VPNetModel* model,
                   const std::vector<atomic_az::Sample>& val, int batch_size) {
   ValStats out;
   if (val.empty()) return out;
-  int64_t sign_ok = 0, top1_ok = 0;
-  double sse = 0;
+  int64_t sign_ok = 0, top1_ok = 0, result_sign_ok = 0;
+  double sse = 0, result_sse = 0;
 
   for (size_t i = 0; i < val.size(); i += batch_size) {
     const size_t end = std::min(val.size(), i + batch_size);
@@ -162,6 +165,16 @@ ValStats Validate(az::VPNetModel* model,
         out.n_decisive += 1;
         if ((outputs[j].value >= 0) == (s.value >= 0)) sign_ok += 1;
       }
+      // With Stockfish distillation `value` is mostly the engine's evaluation,
+      // so the target-based numbers above say little about whether the net
+      // knows who wins. Score against the raw outcome too; this is the figure
+      // comparable to the RL learner's value_accuracy.
+      if (s.game_result != 0.0) {
+        const double rdiff = outputs[j].value - s.game_result;
+        result_sse += rdiff * rdiff;
+        out.n_result += 1;
+        if ((outputs[j].value >= 0) == (s.game_result >= 0)) result_sign_ok += 1;
+      }
       Action best = open_spiel::kInvalidAction;
       double best_p = -1.0;
       for (const auto& [action, prob] : outputs[j].policy) {
@@ -181,6 +194,10 @@ ValStats Validate(az::VPNetModel* model,
   out.value_sign_acc = out.n_decisive > 0
                            ? static_cast<double>(sign_ok) / out.n_decisive
                            : 0.0;
+  out.result_mse = out.n_result > 0 ? result_sse / out.n_result : 0.0;
+  out.result_sign_acc =
+      out.n_result > 0 ? static_cast<double>(result_sign_ok) / out.n_result
+                       : 0.0;
   return out;
 }
 
@@ -289,10 +306,14 @@ int main(int argc, char** argv) {
       std::cerr << "[pretrain] cannot open --val_sf_tsv " << val_tsv << std::endl;
       return 1;
     }
+    // Cap the games read, not just the samples kept: the reader used to parse
+    // the entire 2.4M-position shard and throw away all but --val_samples,
+    // costing ~10 minutes of wall time per job for nothing.
+    const int64_t val_games = std::max<int64_t>(1, cap / 25);
     atomic_az::SfStats s = atomic_az::ReadSfTsv(
         in, *game, sf_opt, [&](atomic_az::Sample&& x) {
           if (static_cast<int>(val.size()) < cap) val.push_back(std::move(x));
-        });
+        }, val_games);
     std::cout << "[pretrain] validation (sf): " << s.ToString() << std::endl;
   }
   if (val.empty()) {
@@ -334,6 +355,7 @@ int main(int argc, char** argv) {
       ValStats v = Validate(&model, val, batch_size);
       std::cout << "  VAL step " << step << "  value_mse " << v.value_mse
                 << "  value_sign_acc " << v.value_sign_acc
+                << "  result_sign_acc " << v.result_sign_acc
                 << "  policy_top1 " << v.policy_top1 << "  (n=" << v.n << ")"
                 << std::endl;
     }
@@ -395,6 +417,8 @@ int main(int argc, char** argv) {
       ValStats v = Validate(&model, val, batch_size);
       std::cout << "[pretrain] EPOCH " << epoch_label << " VAL  value_mse "
                 << v.value_mse << "  value_sign_acc " << v.value_sign_acc
+                << "  result_mse " << v.result_mse
+                << "  result_sign_acc " << v.result_sign_acc
                 << "  policy_top1 " << v.policy_top1 << std::endl;
     }
   }

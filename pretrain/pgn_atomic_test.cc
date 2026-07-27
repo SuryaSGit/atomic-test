@@ -175,7 +175,11 @@ void TestValueSignConvention(const open_spiel::Game& game) {
   SPIEL_CHECK_EQ(s.samples, 7);
   SPIEL_CHECK_EQ(samples.size(), 7);
   // "1-0": White won, White is player 1, so player 0's value is -1.
-  for (const Sample& smp : samples) SPIEL_CHECK_EQ(smp.value, -1.0);
+  for (const Sample& smp : samples) {
+    SPIEL_CHECK_EQ(smp.value, -1.0);
+    // No blending for human games: the two fields agree.
+    SPIEL_CHECK_EQ(smp.game_result, -1.0);
+  }
   std::cout << "  1-0 -> p0 value -1.0 over 7 plies OK" << std::endl;
 
   s = Run(game, kGameBlackWins, f, &samples);

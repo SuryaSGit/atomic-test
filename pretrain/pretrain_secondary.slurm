@@ -51,11 +51,12 @@ EPOCH_OFFSET="${EPOCH_OFFSET:-0}"
 # more often.
 REUSE="${REUSE:-4}"
 
-# Calibrated on 579k labelled positions from this dataset by fitting
-# tanh(cp/K) to the observed outcome. Atomic swings far exceed chess: the
-# chess default of 400 saturates (tanh(1000/400)=0.99 where the real win rate
-# at +1000cp is 0.56). Re-run the calibration if the generator config changes.
-CP_SCALE="${CP_SCALE:-1620}"
+# Fitted over all 18,967,523 labelled positions by minimising weighted SSE
+# between tanh(cp/K) and the observed outcome per centipawn bucket. Atomic
+# swings far exceed chess: the chess default of 400 saturates (tanh(1000/400)
+# = 0.99, where the real win rate at +1000cp is 0.56) and scores 8x the error
+# (SSE/n 0.131 vs 0.015). Re-fit if the generator config changes.
+CP_SCALE="${CP_SCALE:-1580}"
 # Weighted toward the search score because --explore_prob injects random moves,
 # which makes the game-RESULT component noisier than the per-position scores.
 LAMBDA="${LAMBDA:-0.8}"

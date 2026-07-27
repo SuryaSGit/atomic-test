@@ -27,6 +27,13 @@ struct Sample {
   // every state in a trajectory. OpenSpiel chess maps Black -> 0, White -> 1,
   // so a white win is -1.
   double value = 0.0;
+
+  // The raw game outcome for player 0, before any blending with a search
+  // score. Identical to `value` for human PGNs, but for Stockfish distillation
+  // `value` is mostly the engine's evaluation -- so this is the only field that
+  // answers "did the net predict who actually won", which is the metric
+  // comparable to the RL learner's value_accuracy.
+  double game_result = 0.0;
 };
 
 // Convenience for the common one-hot case.

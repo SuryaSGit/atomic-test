@@ -118,6 +118,11 @@ void TestReplay(const open_spiel::Game& game) {
     SPIEL_CHECK_TRUE(found);
   }
 
+  // game_result must stay the RAW outcome, unblended, on every sample.
+  for (const Sample& smp : s) SPIEL_CHECK_EQ(smp.game_result, -1.0);
+  // With lambda=1 the value target ignores the outcome, so the two differ.
+  SPIEL_CHECK_NE(s[0].value, s[0].game_result);
+
   // Ply 0 is White (player 1) to move at +30cp -> negative for player 0.
   SPIEL_CHECK_LT(s[0].value, 0.0);
   // Ply 1 is Black (player 0) at -25cp -> also negative for player 0.

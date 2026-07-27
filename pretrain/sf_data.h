@@ -206,6 +206,7 @@ inline bool SfLineToSamples(const open_spiel::Game& game,
     // The label describes THIS position, so the mover is the current player --
     // not the player who happens to have moved last.
     s.value = ValueTarget(stm_cp, result_p0, state->CurrentPlayer(), opt);
+    s.game_result = result_p0;
     pending.push_back(std::move(s));
 
     state->ApplyAction(played);  // may differ from scored[0] when exploring
