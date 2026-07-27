@@ -87,6 +87,15 @@ ABSL_FLAG(int, opening_plies, 4,
 ABSL_FLAG(int, max_plies, 400, "Ply cap; games hitting it are excluded.");
 ABSL_FLAG(int, seed, 1, "RNG seed for openings and MCTS.");
 ABSL_FLAG(bool, verbose, false, "Print each game's moves.");
+ABSL_FLAG(bool, value_calibration, true,
+          "Measure the value head on the positions WE reach, and compare with "
+          "its accuracy on held-out training positions. A large gap means "
+          "distribution shift: competent on the teacher's positions, unreliable "
+          "on its own. That distinguishes 'net too small' from 'net trained on "
+          "the wrong distribution', which need different fixes.");
+ABSL_FLAG(std::string, dump_games, "",
+          "Write our games as UCI move lines, for relabelling by sf_label in "
+          "an iteration round.");
 
 using namespace open_spiel;
 namespace az = open_spiel::algorithms::torch_az;
@@ -141,6 +150,7 @@ int main(int argc, char** argv) {
   cfg.seed = absl::GetFlag(FLAGS_seed);
   cfg.verbose = absl::GetFlag(FLAGS_verbose);
   cfg.go_cmd = go_cmd;
+  cfg.dump_games_path = absl::GetFlag(FLAGS_dump_games);
 
   auto make_bot = [&](int seed) -> std::unique_ptr<Bot> {
     return std::make_unique<algorithms::MCTSBot>(
@@ -161,7 +171,67 @@ int main(int argc, char** argv) {
     std::cout << ", skill=" << absl::GetFlag(FLAGS_sf_skill);
   std::cout << ")\n" << cfg.pairs << " colour-swapped pairs\n" << std::endl;
 
-  atomic_az::MatchResult res = atomic_az::RunMatch(*game, &sf, make_bot, cfg);
+  // --- value-head calibration on our own positions -------------------------
+  // The raw network value, without search, at every position we had to move in.
+  // Buffered per game because the label (who actually won) only exists at the
+  // end.
+  std::vector<double> game_values;      // player-0-relative, current game
+  std::vector<double> all_values;       // over finished games
+  std::vector<double> all_results;
+  const bool calib = absl::GetFlag(FLAGS_value_calibration);
+
+  atomic_az::PositionHook pos_hook = nullptr;
+  atomic_az::ResultHook res_hook = nullptr;
+  if (calib) {
+    pos_hook = [&](const State& st, Player) {
+      // Evaluate() returns {v, -v} for players {0, 1}, so index 0 is the
+      // player-0-relative value -- the same convention the training targets use.
+      game_values.push_back(az_eval->Evaluate(st)[0]);
+    };
+    res_hook = [&](double result_p0, bool finished) {
+      if (finished && result_p0 != 0.0) {
+        for (double v : game_values) {
+          all_values.push_back(v);
+          all_results.push_back(result_p0);
+        }
+      }
+      game_values.clear();
+    };
+  }
+
+  atomic_az::MatchResult res =
+      atomic_az::RunMatch(*game, &sf, make_bot, cfg, pos_hook, res_hook);
   atomic_az::PrintResult(res, "AZ vs Fairy-Stockfish");
+
+  if (calib && !all_values.empty()) {
+    int64_t sign_ok = 0;
+    double sse = 0;
+    for (size_t i = 0; i < all_values.size(); ++i) {
+      sign_ok += ((all_values[i] >= 0) == (all_results[i] >= 0)) ? 1 : 0;
+      const double d = all_values[i] - all_results[i];
+      sse += d * d;
+    }
+    const double acc = static_cast<double>(sign_ok) / all_values.size();
+    std::cout << "\n========== VALUE HEAD ON OUR OWN POSITIONS ==========\n"
+              << "positions        : " << all_values.size()
+              << "  (decisive games only)\n"
+              << "result_sign_acc  : " << acc << "\n"
+              << "mse vs outcome   : " << (sse / all_values.size()) << "\n"
+              << "reference        : 0.711 on held-out SF-vs-SF positions, "
+                 "against a measured ceiling of 0.725\n";
+    if (acc < 0.60) {
+      std::cout << "READ: far below the training-distribution figure. This is "
+                   "distribution shift -- the net is unreliable on the "
+                   "positions it actually reaches. Relabelling its own games "
+                   "(iteration) addresses this; more capacity would not.\n";
+    } else if (acc < 0.68) {
+      std::cout << "READ: moderately below the training-distribution figure. "
+                   "Some distribution shift, but not the whole story.\n";
+    } else {
+      std::cout << "READ: comparable to the training-distribution figure, so "
+                   "the value head generalises to its own positions. The "
+                   "bottleneck is capacity or policy quality, not shift.\n";
+    }
+  }
   return 0;
 }

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <random>
 #include <sstream>
@@ -72,6 +73,16 @@ struct MatchResult {
   }
 };
 
+// Called at each position where OUR bot is to move, with the state and the
+// player id we are playing. Lets a caller measure the network on the positions
+// it actually reaches -- which is not the distribution it was trained on.
+using PositionHook =
+    std::function<void(const open_spiel::State&, open_spiel::Player)>;
+
+// Called once per finished game with the final result for player 0, so a hook
+// can score its recorded positions against the outcome.
+using ResultHook = std::function<void(double result_p0, bool finished)>;
+
 struct MatchConfig {
   int pairs = 20;          // each pair = the same opening played both colours
   int opening_plies = 4;   // random plies for opening diversity
@@ -79,6 +90,9 @@ struct MatchConfig {
   int seed = 1;
   bool verbose = false;
   std::string go_cmd = "go nodes 100000";
+  // Optional: dump each game's move sequence (UCI, space separated) so the
+  // positions can later be relabelled by Stockfish for an iteration round.
+  std::string dump_games_path;
 };
 
 // Asks Fairy-Stockfish for a move and translates it through OUR board, so we
@@ -117,7 +131,13 @@ inline open_spiel::Action StockfishMove(
 inline MatchResult RunMatch(
     const open_spiel::Game& game, open_spiel::uci::UCIBot* sf,
     const std::function<std::unique_ptr<open_spiel::Bot>(int)>& make_bot,
-    const MatchConfig& cfg) {
+    const MatchConfig& cfg, const PositionHook& on_our_position = nullptr,
+    const ResultHook& on_result = nullptr) {
+  std::unique_ptr<std::ofstream> dump;
+  if (!cfg.dump_games_path.empty()) {
+    dump = std::make_unique<std::ofstream>(cfg.dump_games_path);
+    *dump << "# games played by our bot; UCI moves, one game per line\n";
+  }
   const open_spiel::Player kWhite = game.NewInitialState()->CurrentPlayer();
   MatchResult res;
   std::mt19937 rng(cfg.seed);
@@ -147,12 +167,26 @@ inline MatchResult RunMatch(
       int ply = static_cast<int>(opening.size());
       bool broke = false;
       std::vector<std::string> history;
+      std::vector<std::string> uci_moves;
+      if (dump) {
+        // Replay the opening so the dumped line starts from the initial
+        // position, matching the sf_label dataset format.
+        auto tmp = game.NewInitialState();
+        for (open_spiel::Action a : opening) {
+          const auto& tas = open_spiel::down_cast<
+              open_spiel::atomic_chess::AtomicChessState&>(*tmp);
+          uci_moves.push_back(
+              open_spiel::chess::ActionToMove(a, tas.Board()).ToLAN());
+          tmp->ApplyAction(a);
+        }
+      }
       while (!s->IsTerminal() && ply < cfg.max_plies) {
         const auto& as = open_spiel::down_cast<
             open_spiel::atomic_chess::AtomicChessState&>(*s);
         const open_spiel::Player cur = s->CurrentPlayer();
         open_spiel::Action a;
         if (cur == our_seat) {
+          if (on_our_position) on_our_position(*s, our_seat);
           a = bot->Step(*s);
         } else {
           a = StockfishMove(sf, as, cfg.go_cmd);
@@ -165,8 +199,25 @@ inline MatchResult RunMatch(
           }
         }
         if (cfg.verbose) history.push_back(s->ActionToString(cur, a));
+        if (dump) {
+          uci_moves.push_back(
+              open_spiel::chess::ActionToMove(a, as.Board()).ToLAN());
+        }
         s->ApplyAction(a);
         ++ply;
+      }
+
+      const bool finished = !broke && s->IsTerminal();
+      if (on_result) {
+        on_result(finished ? s->Returns()[0] : 0.0, finished);
+      }
+      if (dump && finished) {
+        *dump << s->Returns()[0] << "\t";
+        for (size_t i = 0; i < uci_moves.size(); ++i) {
+          if (i) *dump << " ";
+          *dump << uci_moves[i];
+        }
+        *dump << "\n";
       }
 
       std::string label;
