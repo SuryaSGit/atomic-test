@@ -1,362 +1,487 @@
-# Plan: AlphaZero on atomic chess
+# Plan: a publishable result from atomic chess
 
-Status as of 2026-07-25. Every claim below is annotated with the source that
-establishes it — `file:line` for code, "measured" for numbers derived from this
-run's logs, "MultiAra" for [Gehrke 2021](https://ml-research.github.io/papers/gehrke2021assessing.pdf),
-the only published study covering atomic.
+Status as of 2026-07-28. Every claim is annotated with its source — `file:line`
+for code, "measured" for numbers from this project's runs, "MultiAra" for
+[Gehrke 2021](https://ml-research.github.io/papers/gehrke2021assessing.pdf), the
+only published study covering atomic.
 
 Paths are relative to the repo root; `$SP` = `/u/$USER/scratch/open_spiel`,
-`$SCRATCH` = `/u/$USER/scratch`.
+`$SCRATCH` = `/u/$USER/scratch`, `$DATA` = `~/atomic_sf_data` locally.
 
 ---
 
 ## 0. Where we are
 
-Job `9658911` is training from zero on one H200 with chess-scale
-hyperparameters. It works end to end — self-play, GPU inference, evaluator
-threads, checkpointing — but has produced no learn step yet, and four config
-values are actively wasting the run.
+The project reached a working end-to-end pipeline: an atomic-chess AlphaZero net,
+a Fairy-Stockfish distillation dataset, a statistically sound match harness, and
+a supervised trainer that shares the RL loop's loss, optimizer and checkpoint
+format. What it has *not* reached is playing strength.
 
-**Eval ladder after 25 games at step 0** (measured, `log-evaluator-{0,1}.txt`):
+**Measured, 2026-07-27, 60 paired games vs Fairy-Stockfish:**
 
-| MCTS sims | AZ record | mean return |
+| | Score | Record |
 |---|---|---|
-| 300 | 2W / 2L | 0.00 |
-| 948 – 300000 | 0W / 21L | −1.00 |
+| as White | 23.3% ± 15.4 | 7W 0D 23L |
+| as Black | **0.0% ± 0.0** | 0W 0D 30L |
+| overall | 11.7% ± 8.2 | 7W 0D 53L |
 
-Total **2W/23L = 8%**, mean return −0.84, no draws. Both wins came as White.
-That is the expected floor for a randomly-initialised net, not a signal.
+**Measured, sims sweep:** 13 / 8.8 / 10 / 11.2% at 200 / 400 / 800 / 1600
+simulations. An 8× increase in search buys nothing, so the network — not the
+search — is the binding constraint.
 
-**Game lengths: mean 15.2 plies, median 11, range 5–42** (measured, n=25). This
-single number is what invalidates most of the current config — the defaults
-assume chess-length games of 80–150 plies.
+**Measured 2026-08-01, the ablation (two arms, equal budget ~66.3M positions,
+4 epochs each):**
 
-### Revised target
+| Arm | Teacher holdout EDGE | T3 own-play EDGE | retained | policy_top1 (teacher → T3) |
+|---|---|---|---|---|
+| A4 — base only | 0.19654 | 0.16849 | **86%** | 0.4095 → 0.3499 |
+| B — 50/50 base + diversified | 0.19408 | 0.16844 | **87%** | 0.4060 → 0.3567 |
 
-MultiAra reached **parity with Fairy-Stockfish 13.1 classical eval** at atomic,
-and lost to **Fairy-Stockfish with the atomic NNUE by ~300 Elo** (the atomic
-NNUE alone gave Fairy-SF ~500 Elo). So:
+Two results, both negative for the original hypothesis:
 
-- **Milestone: parity with Fairy-Stockfish, `Use NNUE=false`.** This equals the
-  published state of the art and is what "beat MultiAra" amounts to — the two
-  are the same rung, and Fairy-SF is already built while MultiAra needs
-  MXNet 1.8 / TensorRT 8 and model downloads.
-- Beating NNUE-enabled Fairy-SF at atomic would be **new**, and is a stretch
-  goal, not a plan.
+1. **Opening diversification changes nothing.** The arms differ by 0.000045 in
+   EDGE. Untargeted coverage neither helped nor hurt, on either distribution.
+2. **Distribution shift is modest, not catastrophic.** 86% of the edge survives
+   on own-play positions.
 
----
+⚠️ **A retracted claim.** Earlier readings of "0.618 against a 0.617 base rate"
+(no information) and "39% retained" were **measurement artifacts**, not model
+behaviour. Two errors compounded:
 
-## Phase 1 — Stop wasting the current run (do first, ~1 hour)
+- The `az_vs_sf` hook scored only positions where **our bot moved** (~20k),
+  while `Validate()` scores **all** positions (44,633 decisive).
+- Its base rate was computed **per game** by hand — 703 of 1,153 decisive games
+  won by White = 0.610 — where the correct **position-weighted** rate on the
+  same games is **0.537**. Black-won games are systematically longer, so
+  weighting by position dilutes White's share.
 
-### 1.1 `temperature_drop=20` exceeds the average game length
+The wrong denominator inflated the apparent shift roughly twofold. Trust the
+`Validate()` numbers: same code path as the teacher measurement, larger n, base
+rate computed on exactly the positions scored.
 
-`PlayGame` samples moves ∝ visit counts until `history.size() >= temperature_drop`,
-then plays greedily (`alpha_zero.cc:135-139`). With `temperature_drop=20` and a
-15.2-ply mean game, **the greedy phase never happens** — every self-play game is
-sampled at full temperature start to finish.
+**Both arms are at the label ceiling on value** (0.7285 / 0.7261 against a
+measured ceiling of 0.725) — no headroom there. **The policy head is not:**
+`policy_top1` of 0.41 means it disagrees with Stockfish on ~3 of 5 moves.
 
-Why it matters: atomic games are decided by single moves. Sampling ∝ visits
-regularly plays a move the search knows loses to an explosion mate, so the value
-head learns that sound positions are lost. The value targets are corrupted by
-self-inflicted blunders.
+**Measured, sims sweep** (on the *original* 16M arm A — worth redoing):
+13 / 8.8 / 10 / 11.2% at 200 / 400 / 800 / 1600 simulations.
 
-**→ `--temperature_drop=6`** (~⅓ of a typical game). Highest-value single change.
+**Measured, playing strength** (arm A original, vs Fairy-SF at 10k nodes,
+n=1200 paired): 62.1% as White, 41.0% as Black, **51.5% ± 2.8 overall**.
 
-### 1.2 `learn_rate` is 262,144 states per step
+**Datasets in hand** (measured, `$DATA`):
 
-`learn_rate = replay_buffer_size / replay_buffer_reuse` = 1048576/4
-(`alpha_zero.cc:324`, consumed at `:355`). At 15.2 states/game that is
-**~17,200 self-play games per learn step** — roughly 5× what the config intends,
-because atomic games are ~5× shorter than chess games.
-
-**→ `--replay_buffer_size=262144`** (~4,300 games/step, ~6× more gradient steps
-per GPU-hour). Side benefit: the buffer is serialised **every** learn step
-(`alpha_zero.cc:403`) at ~4.7KB/state ≈ 4.7GB/step, dropping to ~1.2GB.
-
-⚠️ **Requires a fresh run directory.** `LoadBuffer` fatally errors if the saved
-buffer's `max_size` differs (`serializable_circular_buffer.h:53-57`), so
-changing this mid-run guarantees a crash on the next requeue.
-
-### 1.3 The net is oversized for this game
-
-ResNet 256×20 ≈ **24.3M params** (~97MB fp32, ~290MB per checkpoint pair with
-optimizer state). Every actor move costs 300 forward passes, so net size
-throttles the self-play data rate — the scarce resource. MultiAra used
-RISEv2-mobile with **13 blocks**, smaller and cheaper.
-
-**→ `--nn_width=128 --nn_depth=10`** (~6M params, ~4× the games/hour). Scale up
-only after the small net plateaus.
-
-### 1.4 The eval ladder eats ~85% of evaluator CPU
-
-Opponent sims are `max_simulations × 10^(level/2)` → 300, 948, 3000, 9486,
-30000, 94868, 300000 (`alpha_zero.cc:276`). `EvalResults::Next()` round-robins
-over `eval_levels × 2` slots, so every level gets an **equal game count** and
-wall-clock is dominated by the slowest. Measured: levels 4–6 consumed ~85% of 37
-minutes for 9 of 19 games, and evaluator-1 spent **29+ minutes on one
-300,000-sim game**. The opponent is `RandomRolloutEvaluator` — pure CPU, so both
-evaluator threads peg a core producing no training data.
-
-**→ `--eval_levels=4 --evaluators=1 --evaluation_window=30`**
-
-### 1.5 Consolidated fresh-start config
-
-Apply to [train_atomic_az.sh](train_atomic_az.sh):
-
-```
---nn_width=128 --nn_depth=10       # was 256 / 20
---temperature_drop=6               # was 20
---replay_buffer_size=262144        # was 1048576
---eval_levels=4                    # was 7
---evaluators=1                     # was 2
---evaluation_window=30             # was 100
---checkpoint_freq=25               # steps are ~6x faster now
-```
-
-Leave `max_simulations=300`, `uct_c=2.0`, `replay_buffer_reuse=4`,
-`policy_alpha/epsilon`, `learning_rate`, `weight_decay` alone — those are sound.
-
-### 1.6 Request more CPU
-
-`--cpus-per-task=16` with `--gres=gpu:H200:1`
-([atomic_az.slurm:10-11](atomic_az.slurm#L10-L11)). OpenSpiel runs MCTS tree
-search on **CPU** and uses the GPU only for batched inference, so self-play is
-core-limited while the H200 has headroom. MultiAra independently hit this —
-their GPUs used under 950MB of 32GB at batch size 8, and "run multiple
-self-play processes on one GPU" was their top recommendation.
-
-**→ Raise `--cpus-per-task` to 32–64** if the partition allows, and scale
-`--actors` with it. Likely the largest throughput win available.
-
-### 1.7 Fix the preemption crash
-
-[train_atomic_az.sh:20](train_atomic_az.sh#L20) resumes whenever `config.json`
-exists. But `config.json` is written at **startup** (`alpha_zero.cc:552-555`)
-while `learner.jsonl` is not written until the first learn step **completes** —
-currently 90+ minutes. Preempted at minute 40, the requeued job finds
-`config.json` with an empty/absent `learner.jsonl` and dies in
-`json::FromString("").value()` (`alpha_zero.cc:82-83`).
-
-**→ Guard the resume condition:**
-
-```bash
-if [[ -f "${CONFIG}" && -s "${RUN_DIR}/learner.jsonl" ]]; then
-  # resume
-else
-  # fresh start
-fi
-```
-
-### Acceptance criteria
-
-- [ ] `log-learner.txt` shows `Step: 1` within ~20 minutes of launch
-- [ ] `jq '.game_length.avg' learner.jsonl` ≈ 15–25
-- [ ] `eval.results[0]` climbing above 0 within a few hours
-- [ ] A killed-and-requeued job resumes without crashing
-
----
-
-## Phase 2 — Make measurement trustworthy (~2 hours, parallel with training)
-
-Nothing below changes training; it changes whether we can tell progress from
-noise. Currently we cannot.
-
-### 2.1 Build `az_vs_sf` (it has never been compiled)
-
-```bash
-cp eval/az_vs_sf.cc $SP/open_spiel/examples/
-```
-Add to `$SP/open_spiel/examples/CMakeLists.txt`:
-```cmake
-if (${OPEN_SPIEL_BUILD_WITH_LIBTORCH})
-  add_executable(az_vs_sf az_vs_sf.cc ${OPEN_SPIEL_OBJECTS})
-  target_link_libraries(az_vs_sf ${TORCH_LIBRARIES})
-endif()
-```
-```bash
-cd $SP/build && make -j az_vs_sf
-```
-
-### 2.2 Three harness fixes
-
-1. **Per-colour scores.** Most important. `harnesses/README.md` records that
-   after `1.Nf3`, 17 of 20 Black replies **lose by force**. If atomic is
-   heavily White-favoured, an aggregate 50% could be 100% as White and 0% as
-   Black — indistinguishable from "equal strength". Print White score, Black
-   score, and n separately, always.
-2. **Unfinished games are scored as draws.**
-   [az_vs_sf.cc:107](eval/az_vs_sf.cc#L107) maps a non-terminal state (600-ply
-   cap, or an unparseable SF reply) to `r = 0.0` → 0.5 points, silently
-   inflating the score. Count and report them separately.
-3. **`ucinewgame` between games.** One `UCIBot` is reused for the whole match
-   with no reset ([az_vs_sf.cc:85](eval/az_vs_sf.cc#L85)), so SF carries hash
-   and history across games. Send `ucinewgame` + `isready` per game.
-
-### 2.3 Deterministic, finer-grained opponent strength
-
-- **Nodes, not milliseconds.** `go movetime` results depend on machine load.
-  Switch to `go nodes N` for reproducibility across runs and hardware.
-- **`UCI_Elo` instead of Skill Level.** Fairy-SF supports
-  `UCI_LimitStrength=true` + `UCI_Elo=<n>` for a smooth ~1350–2850 dial rather
-  than 21 coarse, blunder-injecting steps:
-  ```cpp
-  uci::Options opts = {{"UCI_Variant", "atomic"},
-                       {"UCI_LimitStrength", "true"},
-                       {"UCI_Elo", std::to_string(target_elo)}};
-  ```
-- **Fix the defaults.** [az_vs_sf.cc:39-40](eval/az_vs_sf.cc#L39-L40) default to
-  skill 20 / 200ms — full strength with *more* thinking time than the baseline
-  that already scored ~0%. Default to the bottom rung instead.
-
-### 2.4 Determine the real target strength
-
-```bash
-./stockfish
-setoption name UCI_Variant value atomic
-uci        # look for EvalFile / NNUE
-```
-If an atomic NNUE is loaded, `setoption name Use NNUE value false` is the
-milestone opponent. Record which build and which NNUE file, since MultiAra's
-numbers are against **Fairy-SF 13.1** and current versions differ.
-
-### 2.5 Enough games, paired openings
-
-The README's "~17% (1W/6)" has a 95% CI of roughly 0–50% — it is noise. At n=40
-the standard error on a proportion is ±8pp; distinguishing 40% from 50% needs
-several hundred games.
-
-- Play **paired openings** (same opening, colours swapped) and score the pair.
-- Always report `score% ± 1.96·√(p(1−p)/n)`.
-- Never act on a single 40-game run.
-
-### Acceptance criteria
-
-- [ ] `az_vs_sf` builds and completes a 20-game match
-- [ ] Output shows per-colour scores, unfinished-game count, and a CI
-- [ ] Two identical invocations produce statistically consistent results
-
----
-
-## Phase 3 — Supervised pretraining (built, needs cluster build)
-
-Code is complete in [pretrain/](pretrain/). See
-[pretrain/README.md](pretrain/README.md) for full detail.
-
-### Evidence
-
-| MultiAra finding | Number |
-|---|---|
-| From-zero vs supervised-init (King of the Hill ablation) | from-zero **~220 Elo weaker**, never caught up |
-| Cost of from-zero | **26 days on 4 Tesla V100s** |
-| Cost of supervised model | "several hours on a single GPU" |
-| RL gain over supervised init, **atomic** | **+150 Elo** fast TC / +115 long |
-| RL gain, other variants | +300 to +690 Elo |
-| Atomic supervised data | 36M samples ≈ 530k games |
-| Epoch count | **7 epochs generalised better than 30** |
-
-We are currently on the from-zero path, on one GPU. The published evidence says
-that is ~220 Elo worse *and* an order of magnitude more expensive.
-
-### Steps
-
-1. **Verify the reader** (already passing locally, re-run on the cluster):
-   recipe in [pretrain/README.md](pretrain/README.md) §1. Expect
-   `ALL TESTS PASSED`.
-2. **Build the trainer:**
-   ```bash
-   cp pretrain/az_pretrain.cc pretrain/pgn_atomic.h $SP/open_spiel/examples/
-   # add the az_pretrain target to examples/CMakeLists.txt (README §2)
-   cd $SP/build && make -j az_pretrain
-   ```
-3. **Get data.** Atomic files are per-month at
-   `https://database.lichess.org/atomic/`. Hold out a **separate month** for
-   validation — never a random split, since positions within a game are highly
-   correlated and would leak. MultiAra used April 2018 as test, August 2018 as
-   validation, and Elo ≥ 1900 for atomic (top 10th percentile).
-4. **Run:**
-   ```bash
-   export TRAIN_PGN=$SCRATCH/data/lichess_db_atomic_rated_2020-06.pgn
-   export VAL_PGN=$SCRATCH/data/lichess_db_atomic_rated_2018-08.pgn
-   export RUN_DIR=$SCRATCH/atomic_az/run_pretrained
-   bash pretrain/bootstrap_pretrained_run.sh
-   ```
-5. **Pick the best epoch** by `policy_top1` on the held-out month, not the
-   default. A checkpoint is written per epoch; copy the winner over
-   `checkpoint--1.pt` (README §5).
-
-### Why the bootstrap script has four phases
-
-A **fresh** RL start destroys pretrained weights: with `resuming == false` it
-calls `SaveCheckpoint(0)` from random init then loads it back
-(`alpha_zero.cc:585-595`), and rewrites `vpnet.pb` whenever `config.graph_def`
-is empty. The **resume** path does neither. So injection must go through resume:
-generate `vpnet.pb`+`config.json` from the real flags → pretrain against that
-exact `vpnet.pb` → seed `learner.jsonl` with a step-0 record → launch with the
-positional `config.json`.
-
-### Acceptance criteria
-
-- [ ] `ALL TESTS PASSED` on the cluster build
-- [ ] `games_used` is a large fraction of `games_seen` (high `skipped_parse`
-      means the reader is wrong — investigate, don't proceed)
-- [ ] `policy_top1` reaches ≥ 0.35 and `value_sign_acc` ≥ 0.60 on held-out data
-- [ ] The RL job prints **`Loading model from step -1`** and
-      **`Using existing model`** — `step 0` or `Overwriting existing model`
-      means the pretrained weights were discarded
-- [ ] `eval.results[0]` starts well above the from-zero run's −1.0
-
----
-
-## Phase 4 — Climb the ladder
-
-Advance only when the current rung is cleared with error bars that exclude the
-threshold.
-
-| Rung | Opponent | Target | Gate |
+| Set | Games | Positions | White/Black/Draw |
 |---|---|---|---|
-| 0 | rollout MCTS, 300 sims | >80% | `eval.results[0]` > +0.6 sustained |
-| 1 | rollout MCTS, 3000 sims | >60% | `eval.results[2]` > +0.2 |
-| 2 | Fairy-SF `UCI_Elo=1400`, 100k nodes | >50% | 200+ paired games, CI excludes 50% |
-| 3 | Fairy-SF `UCI_Elo=1800` | >50% | same |
-| 4 | Fairy-SF `UCI_Elo=2200` | >40% | same |
-| 5 | **Fairy-SF full, `Use NNUE=false`** | parity | **the milestone — equals MultiAra** |
-| 6 | Fairy-SF with atomic NNUE | any wins | stretch; beyond published results |
+| `atomic.*` (`random_plies=8`) | 574,858 | 18,967,523 | 52.7 / 44.8 / 2.6% |
+| `hard/atomic.*` (`random_plies=20`) | 561,731 | 14,760,838 | 51.3 / 47.0 / 1.7% |
+| total | 1,136,589 | **33,728,361** | 1.59 GB |
 
-Do not run a Stockfish match before rung 0 is cleared. A net that loses to
-300-sim rollout MCTS will score 0% and teach us nothing.
+Both generated at `label_nodes=10000`, `multipv=4`, NNUE on.
 
-### Levers if we plateau
+### What changed since the last plan
 
-1. **More sims at eval than training.** Train at 300, evaluate at 800–1600
-   (`--az_sims`). Often worth 100+ Elo for free, no retraining.
-2. **More CPU / more actors** (Phase 1.6) — likely still the binding constraint.
-3. **Scale the net** once throughput can feed it: a fresh 256×20 run will pass
-   the small net eventually.
-4. **Opening diversity.** If self-play collapses onto a few forcing lines the
-   net gets narrow and SF punishes it off-book. Check `game_length_hist` and
-   action variety in `log-actor-*.txt`; add random opening plies if collapsed.
-5. **`--replay_buffer_reuse=8`** for more gradient steps per game; watch the
-   value-loss / value-accuracy gap for overfitting.
+Phases 1 and 2 of the previous plan are **done** (config retune at
+[train_atomic_az.sh:82-105](train_atomic_az.sh#L82-L105), resume guard at
+[:26](train_atomic_az.sh#L26), harness rebuild in [eval/match.h](eval/match.h)).
+Phase 3 **pivoted** from lichess PGN supervised learning to Fairy-Stockfish
+distillation (5ba3ab0). Phase 4's ladder gates were bypassed — we ran Stockfish
+matches directly.
 
-### Known risk
+---
 
-MultiAra's atomic RL **stalled after 26 model updates** and no later model could
-beat update 25, even with a reduced learning rate. That was not a compute limit,
-so it may recur here. Mitigations to try in order: more training samples per
-update (their own diagnosis), larger Dirichlet `policy_alpha`, opening
-diversity. Budget for the possibility that atomic self-play plateaus early.
+## 1. The target, and why it is not "beat Fairy-Stockfish"
+
+**Verified against the thesis 2026-08-01** (Gehrke 2021 §5.2, quoted):
+
+> "In 3check, **Atomic** and King of the Hill both engines **were about even**"
+> — vs **Fairy-Stockfish 13.1, classical evaluation**
+>
+> "Fairy-Stockfish now won in 3check, **Atomic** and King of the hill by about
+> 65, **300** and 320 Elo" — with NNUE
+
+So the parity and −300 Elo figures in [pretrain/README.md:20-21](pretrain/README.md#L20-L21)
+are correct. Two qualifiers the summary tables omit, both of which soften the
+milestone:
+
+**1. It is a blitz result.** Figure 5.1: "each player had **10/60 seconds for
+the game** plus 0.1/0.6 seconds per move." And atomic is named as a variant
+where the advantage *shrinks* with thinking time — "MultiAra won significantly
+more games against Fairy-Stockfish in the **fast** time control than in the long
+time control, when playing Horde, Crazyhouse and **Atomic**." Parity at 10-second
+games is not parity at tournament time controls.
+
+**2. RL bought ~40 Elo against a real opponent, not 150.** The "+150 Elo fast
+TC / +115 long" in our table is the **self-relative** gain (Figure 5.1c, Elo
+between MultiAra's own model updates, supervised init pinned at zero). Measured
+against Fairy-Stockfish, §5.2 reports the gain as **"40 Elo for Atomic"** —
+against 330 for 3check, 370 for Antichess, 490 for King of the Hill. Atomic was
+the worst variant but one. A ~4x gap between self-measured and externally
+measured Elo is the classic self-play ladder inflation signature.
+
+**Consequence:** the only published evidence says RL in atomic is worth ~40 Elo
+against an external opponent, after 26 days on 4 V100s, and it stalled — "the
+models of Atomic and Racing kings improved at the beginning, but stopped after
+the 26th and 4th model update". That is a substantive reason to deprioritise RL,
+independent of our compute constraints.
+
+Our RL compute is worse than that by more than an order of magnitude. Measured
+over job 9664549: **3h 23m of GPU time across 59h 27m of wall clock** on the
+preemptible `scavenger` partition — a 5.7% duty cycle, four preemptions, two of
+which ran for 20 seconds and 11 minutes. Chasing a strength result through
+self-play RL on that budget is not a plan.
+
+**But the interesting question here was never the RL.** It is this: distillation
+from a strong engine produces a network that is excellent on the engine's
+positions and uninformative on its own, and that is measurable, fixable, and
+unpublished. Supervised training costs *hours*, not weeks (MultiAra: "several
+hours on a single GPU"), so the paper fits the compute we actually have.
+
+### Contributions, in descending order of confidence
+
+**C1 — Outcome calibration of Fairy-Stockfish's atomic evaluation.**
+33.7M labelled positions with known game outcomes. Chess convention maps
+centipawns to win probability with `tanh(cp/400)`; **for atomic the fitted
+constant is ~1580** (measured, refit on both datasets), i.e. atomic evaluations
+are roughly 4× less decisive per centipawn than chess. Also measured:
+mate-scored positions predict the winner with mean result ±0.92 (n=271k); a
+~0.10 residual White advantage at *equal* evaluation; and an apparent
+non-monotonicity above 1600cp. Nobody has published any of this, and anyone
+training an atomic NNUE or AZ needs the constant. **Status: essentially done.**
+
+**C2 — How to measure distribution shift, and why naive accuracy misleads.**
+Reframed 2026-08-01 after the ablation came back null. The contribution is no
+longer "shift is the bottleneck" — it isn't — but the methodology and the
+negative result:
+
+- Distillation transfers **better than expected**: 86% of the value head's edge
+  survives on positions the net reaches in its own play.
+- Untargeted opening diversification (14.8M extra positions, deliberately wilder
+  openings) produced **no measurable change** at equal training budget.
+- The **same underlying data** yielded verdicts of "no information at all",
+  "moderately degraded", and "comparable to training" depending purely on the
+  baseline used. Accuracy without a base rate is uninterpretable, and a
+  game-weighted base rate applied to a position-level metric is wrong by ~2x.
+
+Negative results with a clean methodology are publishable, and this one is
+cheap to defend: everything is measured through one code path with the baseline
+computed on the scored positions. **Status: complete.**
+
+**C3 — Artifact release.** 33.7M-position atomic dataset, generator, readers,
+and a match harness with per-colour scoring, paired openings and CIs. **Status:
+exists, needs packaging.**
+
+**Stretch — strength.** Place the net on the Fairy-SF `UCI_Elo` scale rather
+than claiming a win. "Our net plays at approximately Elo X at atomic" is a
+reportable result; "we lost to Fairy-Stockfish" is not.
+
+Venues that fit: IEEE Conference on Games (CoG), Advances in Computer Games
+(ACG), AIIDE, or an ML workshop track. All accept focused empirical variant-game
+work; none require beating the state of the art.
+
+---
+
+## Phase 1 — Lock down C1 (~1 day, CPU only)
+
+The calibration result is nearly finished. It needs verification, not compute.
+
+### 1.1 Fix the documented recipe — it returns noise
+
+[pretrain/README.md:85-89](pretrain/README.md#L85-L89) buckets raw `f[2]`
+(**side-to-move** centipawns, per the format header at
+[sf_label.cc:33-34](pretrain/sf_label.cc#L33-L34)) against `result_p0`
+(**player-0** relative) without correcting for whose turn it is. Verified
+2026-07-28: the curve is flat at ≈ −0.02 across every bucket from −29,600 to
++2,400 — no signal at all. The cited fits (1620, then 1580) cannot have come
+from this recipe.
+
+Token *i* (1-based) has White to move when *i* is odd, and White is player 1
+([chess.h:73-78](https://github.com/deepmind/open_spiel)), so the correction is
+`cp_p0 = (i % 2 == 1) ? -cp : cp`. With it, the curve is monotonic:
+
+| bucket cp | mean result | n | tanh(cp/1580) |
+|---|---|---|---|
+| 400 | 0.206 | 193,239 | 0.248 |
+| 800 | 0.443 | 126,161 | 0.467 |
+| 1200 | 0.604 | 72,279 | 0.641 |
+| 1600 | 0.712 | 35,518 | 0.767 |
+| 2000 | 0.640 | 17,951 | 0.853 |
+| 2800 | 0.535 | 7,161 | 0.944 |
+
+Commit the corrected recipe. It is the method of record for a constant that
+drives 70% of every value target (`sf_lambda=0.7`).
+
+### 1.2 The turn-over is a game-phase effect (measured 2026-07-28)
+
+Conditioning the same buckets on ply index resolves it. Mean result by cp
+bucket, `hard/atomic.0.tsv`:
+
+| cp bucket | early (ply ≤20) | mid (21–40) | late (>40) |
+|---|---|---|---|
+| 800 | 0.282 | 0.415 | 0.606 |
+| 1200 | 0.447 | 0.573 | 0.723 |
+| 1600 | 0.551 | 0.675 | 0.798 |
+| 2000 | **0.172** | 0.710 | 0.840 |
+| 2800 | **0.157** | 0.568 | 0.813 |
+
+Late in the game the relationship is monotonic to the top of the range; early it
+collapses above 1600cp. So the aggregate turn-over was mixing phases:
+**Fairy-Stockfish's atomic evaluation is unreliable in early, unstable positions
+and reliable once the game resolves.** That is a stronger and more useful claim
+than the original one.
+
+Two confounders still to rule out before publishing:
+
+1. **Horizon, not phase.** More plies remaining means more chances to squander
+   an advantage. Re-bin by *plies remaining* rather than ply index; if the
+   effect tracks plies-remaining rather than absolute depth, describe it that
+   way.
+2. **Random-opening contamination.** "Early" tokens follow a `uniform(0,20)`
+   random opening, so early labelled positions are also the ones closest to
+   random play. Re-run the split on the `random_plies=8` dataset, where the
+   opening is shorter, and check the effect persists.
+
+**Consequence for our own training:** `sf_lambda=0.8` weights the engine score
+heavily, so early-position value targets are systematically overconfident. This
+is a candidate contributor to arm A's failure that is *independent* of
+distribution shift, and it suggests a phase-dependent lambda or down-weighting
+early positions. Worth an arm of its own if Phase 2 has budget.
+
+### 1.3 Anchor the first-move advantage
+
+**Measured 2026-07-28: White's edge at the true initial position is +11.4pp**
+(53.9/42.8 on `base` n=64,628; 54.2/42.2 on `book` n=18,599; combined n=83,227).
+Direct measurement, not an extrapolation — the datasets record their random
+opening as bare tokens, so games with **zero** random plies can be selected out
+of any shard.
+
+⚠️ **A retracted claim.** Aggregate per-dataset balances (52.7/44.8 at
+`random_plies=8`, 51.3/47.0 at `random_plies=20`) appear to show the first-move
+advantage decaying with opening depth. It does not. Those aggregates average
+over opening-depth **parity**, and the per-depth breakdown is alternating:
+
+| depth | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|---|
+| edge | +11.2 | +15.5 | +13.6 | −4.8 | +17.0 | −9.8 | +19.8 | −14.2 | +22.6 |
+
+At depth *d*, White has played ⌈d/2⌉ random moves to Black's ⌊d/2⌋, so odd
+depths cost White a move *and* give Black the turn. Magnitudes grow with depth
+in both directions: the more chaotic the opening, the more decisive it is to be
+on move. Deeper `random_plies` simply mixes more odd depths in, cancelling the
+even ones — that cancellation was the apparent "decay".
+
+**Never compare colour balance across datasets with different `random_plies`.**
+Condition on depth first.
+
+**Unresolved:** depth 1 breaks the parity pattern (+15.5, favouring White, where
+every other odd depth favours Black), and it replicates on both datasets so it
+is not noise. The parity result does not go in the writeup until this is
+explained. Candidate checks: whether depth-1 games differ in length or draw
+rate, and whether `explore_prob` deviations are distributed evenly by colour.
+
+⚠️ `--random_plies=0 --explore_prob=0` is **degenerate**: SF-vs-SF from the
+initial position is deterministic, so all games would be identical. The depth-0
+sample above comes from the `random_plies=2` run, where a third of games draw
+zero random plies:
+
+```bash
+./sf_label --out=book/atomic --shard=$i --num_shards=8 --games=7000 \
+           --label_nodes=10000 --multipv=4 --random_plies=2 --explore_prob=0.05
+```
+
+Measured: 8 shards, 44m 33s, 55,985 games, 2.08M positions, zero parse failures.
+
+### 1.4 Report `cp_scale` per dataset
+
+1580 was validated on `hard/` (measured 2026-07-28) and holds for |cp| ≤ 1600,
+which covers the bulk of the data. Report the fit, its range of validity, and
+the residual White offset. **Do not** use `--sf_max_abs_cp` to drop mate
+positions: at ±0.92 they are the cleanest signal in the set (17.2% of
+positions).
+
+### Acceptance criteria
+
+- [ ] Corrected recipe committed; rerunning it reproduces 1580 ± 50 on both sets
+- [ ] Turn-over above 1600cp either survives the mate-conditioning check or is
+      dropped from the writeup
+- [ ] First-move advantage reported at 3+ opening depths including 0
+- [ ] Mate-band reliability and the equal-eval White offset both reported with n
+
+---
+
+## Phase 2 — The C2 experiment (~1 week, this is the paper)
+
+A three-arm ablation, all supervised, all on one GPU. The design matters more
+than the compute.
+
+### 2.1 Arms — status after the 2026-08-01 results
+
+| Arm | Training data | Result |
+|---|---|---|
+| **A4** | base only, 66.3M positions | EDGE 0.1965 teacher / 0.1685 T3 |
+| **B** | 50/50 base + diversified, 66.4M | **identical to A4** (Δ EDGE 0.000045) |
+| **C** | + own-play DAgger | **deprioritised** — only 14% of edge is lost to shift, so there is almost nothing to recover. Data is generated and relabelling is ~7 min, so run it for completeness, but do not expect movement. |
+| **D** | phase-conditioned value targets | **promoted** — see below |
+| **E** | larger network | **promoted to top priority** — see §2.6 |
+
+Arm D's justification strengthened rather than weakened: `value_mse` is 0.126 on
+T3 against 0.069 on the teacher holdout — nearly 2x worse — while *sign*
+accuracy holds up. The net knows who is winning off-distribution but its
+magnitudes are miscalibrated, which is exactly what a single global
+`cp_scale` of 1580 predicts when the true fit runs 2800-3000 early and
+1100-1200 late (§1.2). It needs no new data.
+
+### 2.6 Arm E — the network is sized for a constraint that no longer applies
+
+`nn_width=128 nn_depth=10` (~6M params) was chosen in Phase 1 of the *previous*
+plan to raise self-play throughput, because in RL the actor data rate is the
+scarce resource ([train_atomic_az.sh:49-51](train_atomic_az.sh#L49-L51)). **In
+supervised distillation that constraint does not exist** — the data is already
+on disk and the GPU is the only cost.
+
+The evidence says capacity is now the binding constraint on the part that
+matters:
+
+- The **value head is at the label ceiling** (0.726 vs 0.725). More capacity
+  cannot help there, and neither can more data.
+- The **policy head is nowhere near a ceiling** at `policy_top1` 0.41, and
+  policy quality is what MCTS actually consumes. A search that starts from a
+  bad move ordering wastes its simulations — which is the likely explanation for
+  the flat sims sweep.
+
+**→ Train 256x20 (~24M params) on the same 33.7M positions.** Roughly 4x the
+compute per position, so ~12-16h on an A100 for a comparable budget. Score it on
+the same T3 and the same holdout, and re-run the sims sweep: if search finally
+scales with a better policy, that is strength for free.
+
+⚠️ `nn_width`/`nn_depth` can only be set in a run directory with no `vpnet.pb`.
+Use a fresh `RUN_DIR`.
+
+### 2.2 Two design rules that decide whether this is publishable
+
+**Equalise samples seen, not epochs.** Arm A has 18.97M positions and arm B has
+33.7M. Training each for the same number of *epochs* confounds data composition
+with data volume, and the paper's claim is about composition. Fix the number of
+gradient steps across all arms and report it.
+
+**Freeze the own-play test set.** Generate own-play positions **once**, from arm
+A's net, relabel them, and evaluate every arm on those identical positions. If
+each arm is tested on its own self-generated positions, the arms are scored on
+different distributions and the comparison means nothing. This is the easiest
+mistake available here and it invalidates the whole experiment.
+
+### 2.3 Test sets
+
+All held out, none overlapping training:
+
+| Set | Source | Answers |
+|---|---|---|
+| **T1** | shard 7 of `atomic.*` | did it forget the base distribution? |
+| **T2** | shard 7 of `hard/atomic.*` | did it learn the diversified coverage? |
+| **T3** | frozen relabelled own-play (§2.2) | **did any of it transfer to our own positions?** |
+
+T3 is the headline metric. Report every figure against the **base rate of that
+test set** — 0.618 read as a success until we computed the 0.617 base rate, and
+that mistake must not reach a paper.
+
+### 2.4 Prerequisites (small, blocking, do first)
+
+1. **Validation-only path in `az_pretrain`.** `--epochs=0` never reaches a
+   validation call ([az_pretrain.cc:142](pretrain/az_pretrain.cc#L142) runs on
+   the `val_every` schedule). Needed for the "before" measurement, which is
+   only obtainable while the current checkpoint is the current checkpoint.
+2. **Base-rate baseline in the harness.** Majority-class accuracy plus mean, SD
+   and fraction-positive of predicted values, in both `Validate()` and the
+   `az_vs_sf` calibration block.
+3. **Colour-gap threshold.** [match.h:261](eval/match.h#L261) fires above 25pp;
+   the 23.3/0.0 run did not trip it. Lower to ~15pp, or fire whenever either
+   colour is 0% at n ≥ 20.
+4. **Commit the relabeller.** It is load-bearing for arm C and is not in the
+   repo.
+5. **Hold out shard 7** of both datasets before anything is shipped or trained.
+
+### 2.5 Strength measurement
+
+Per arm, several hundred paired games. Note that distinguishing arms 5pp apart
+needs ~400–800 games ([match.h:44-51](eval/match.h#L44-L51) gives ±8pp at
+n=60), so **lower `sf_nodes` for the comparison matches** — relative ranking
+does not need a full-strength opponent, and the harness is reproducible under
+`go nodes`.
+
+Separately, run a `UCI_Elo` sweep with `sf_bridge` to place the best arm on the
+Elo scale. That number, with a CI, is the strength claim.
+
+### Acceptance criteria
+
+- [ ] Three arms trained to an equal number of samples seen
+- [ ] All arms scored on frozen T1/T2/T3, each against its base rate
+- [ ] Per-colour playing strength per arm, n ≥ 400 paired games, with CIs
+- [ ] Best arm placed on the `UCI_Elo` scale with a CI
+- [ ] The Black collapse either fixed or characterised — 0/30 is a finding in
+      its own right given atomic is near colour-balanced at engine strength
+      (measured: 51.3/47.0)
+
+---
+
+## Phase 3 — Packaging (C3)
+
+- Dataset card: generation parameters, 33.7M positions, the format spec at
+  [sf_label.cc:23-37](pretrain/sf_label.cc#L23-L37), colour balance, calibration
+  constant, and the known miscalibrated band.
+- `sf_data_check` output over the released shards, so the artifact ships with
+  its own validation.
+- The harness as the reusable piece: per-colour scoring, paired openings,
+  `ucinewgame`, unfinished-game exclusion, CIs. The README already argues why
+  each matters; that argument is a section of the paper.
+
+---
+
+## Phase 4 — RL, only if the queue allows
+
+Not on the critical path for publication. If it runs, it runs as a bonus arm.
+
+1. **Stop `run_v2`.** It is the from-zero arm — the first launch printed
+   `Creating model` / `Loading model from step 0` — getting 5.7% of the clock,
+   competing with work that has a model. MultiAra scores from-zero ~220 Elo
+   below supervised init at an order of magnitude more compute.
+2. **Move off `scavenger`** to `IllinoisComputes-GPU` / `sridhar-ic` (72h, no
+   preemption); the swap is documented at
+   [atomic_az.slurm:51-54](atomic_az.slurm#L51-L54). Drop `--requeue`.
+3. **Lower `checkpoint_freq`** from 25 ([train_atomic_az.sh:104](train_atomic_az.sh#L104)).
+   Preemptions of 20s and 11m banked nothing.
+4. Launch from the best Phase 2 checkpoint via `bootstrap_pretrained_run.sh`,
+   and confirm `Loading model from step -1` + `Using existing model` on the
+   **first** launch — `run_v2` did not show this.
+
+MultiAra's atomic RL stalled after 26 updates. Budget for that recurring, and do
+not let it block the paper.
+
+---
+
+## What would falsify the plan
+
+- **Arm C does not lift T3 above its base rate.** Then distribution shift is not
+  the binding constraint, and the suspects become capacity (6M params at
+  128×10) and policy-target quality (`multipv=4` may be too coarse). This is
+  still a reportable negative result, but the framing changes.
+- **The 1600cp turn-over is a mate-conditioning artifact** (§1.2). C1 narrows
+  but survives.
+- **The Black collapse is a harness or convention bug**, not a model property.
+  Worth ruling out early: the value sign convention is player-0-relative in
+  three places (`vpevaluator.cc:73-77`, the training targets, the dump format),
+  and a sign error somewhere would look exactly like "cannot play Black."
+  Cheapest check: score arm A's value head separately by colour on T3.
 
 ---
 
 ## Operational rules
 
 **Metrics live in files, not stdout.** `FileLogger` writes only to disk
-(`logger.h:43-58`), so the SLURM `.out` shows startup lines and nothing else —
-that is not a hang. [README.md:128](README.md#L128) is wrong on this.
+(`logger.h:43-58`), so a SLURM `.out` showing startup lines and nothing else is
+not a hang.
 
 ```bash
-R=$SCRATCH/atomic_az/run_main
-tail -30 $R/log-learner.txt
+R=$SCRATCH/atomic_az/run_v2
 jq -c '{step, t:.time_rel, states:.total_states, sps:.states_per_s,
         glen:.game_length.avg, outcomes:.outcomes.counts,
         eval:.eval.results, evalN:.eval.count,
@@ -364,40 +489,39 @@ jq -c '{step, t:.time_rel, states:.total_states, sps:.states_per_s,
    $R/learner.jsonl | tail -20
 ```
 
-`outcomes.counts` is `[Player1, Player2, Draw]`; **player 0 is Black**
-(`chess.h:73-78`), so index 0 is Black's win count.
+`outcomes.counts` is `[Player1, Player2, Draw]`; **player 0 is Black**, so index
+0 is Black's win count. A white win stores `result_p0 = -1`.
 
 **Empty eval windows read as 0.0, not "no data."** `AvgResults()` returns 0 for
 an empty buffer (`alpha_zero.cc:250-252`), indistinguishable from a genuine 0.0
-mean (= 50%). Always cross-check `eval.count`.
+mean. Always cross-check `eval.count`.
 
-**Never change on a resume:**
-- `nn_width` / `nn_depth` — `vpnet.pb` gets rewritten with a shape the
-  checkpoints do not match
-- `replay_buffer_size` — `LoadBuffer` fatally errors on a max-size mismatch
+**Never change on a resume:** `nn_width` / `nn_depth` (`vpnet.pb` is rewritten
+with a shape the checkpoints do not match) or `replay_buffer_size` (`LoadBuffer`
+fatally errors on a max-size mismatch). Bump to a new run directory instead.
 
-**Disk.** ~290MB per checkpoint pair at 256×20 (~75MB at 128×10), kept forever
-every `checkpoint_freq` steps, plus `replay_buffer.data` rewritten every step
-(~4.7GB at buffer 2^20, ~1.2GB at 2^18). Watch the scratch quota.
+**`--sf_cp_scale` defaults to 400** at
+[az_pretrain.cc:65](pretrain/az_pretrain.cc#L65) — the chess value. The slurm
+wrapper passes 1580, but any hand-run invocation must pass it explicitly or the
+value targets are silently wrong. Change the default.
 
-**Delete or update the stale clone.** `~/atomic-test` is a second clone of the
-same GitHub repo, 6 commits behind, still containing the `/gpu:0` bug in 6
-places including its `train_atomic_az.sh` and `smoke_test.slurm`. Two clones
-with one remote is how a job gets launched from the broken copy.
+**Preemption can land mid-write** of `replay_buffer.data` (~1.2GB, rewritten
+every learn step). If a resume ever dies inside buffer deserialisation, delete
+the buffer and let it refill.
 
 ---
 
-## Reference: the numbers that shaped this plan
+## Reference
 
-Reading order for the MultiAra thesis: §4.3 (supervised setup and Elo
-thresholds), §4.4.5 (the atomic MCGS NaN failure — they fell back to plain MCTS,
-the only variant needing it), §5.1 (per-variant RL Elo gains), §5.2 (strength vs
-Fairy-Stockfish), §5.3 (game balance and White/Black win rates — relevant to
-Phase 2.2's per-colour reporting), §5.5 and §6.4 (the zero-knowledge ablation),
-§6.1 (their own throughput recommendations).
+Reading order for the MultiAra thesis: §4.3 (supervised setup, Elo thresholds),
+§4.4.5 (the atomic MCGS NaN failure), §5.1 (per-variant RL Elo gains), §5.2
+(strength vs Fairy-Stockfish), §5.3 (game balance and White/Black win rates),
+§5.5 and §6.4 (the zero-knowledge ablation), §6.1 (throughput recommendations).
 
 Sources: [Gehrke 2021](https://ml-research.github.io/papers/gehrke2021assessing.pdf)
 · [Czech et al. 2020, CrazyAra](https://arxiv.org/abs/1908.06660)
 · [CrazyAra repo](https://github.com/QueensGambit/CrazyAra)
 · [variant-nnue-pytorch](https://github.com/fairy-stockfish/variant-nnue-pytorch)
 · [lichess open database](https://database.lichess.org/)
+· Ross et al. 2011, [DAgger](https://arxiv.org/abs/1011.0686) — the reduction
+  that arm C implements
