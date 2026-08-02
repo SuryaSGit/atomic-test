@@ -42,7 +42,12 @@ SF="${SF:-$SCRATCH/fsf13/src/stockfish}"
 mkdir -p "$SCRATCH/logs"
 
 RUNGS=(0 10000 50000 200000)
-SF_NODES="${RUNGS[${SLURM_ARRAY_TASK_ID:-1}]}"
+# SF_NODES overrides the rung, for reproducing MultiAra's published
+# condition directly: Table D.1 gives its speed as 21,668 NPS, so the fast
+# TC (10s + 0.1s/move, ~0.6s/move) bought it ~13,000 nodes, against a
+# 4-thread Fairy-Stockfish doing roughly 2M in the same time.
+#   MA_NODES=13000 SF_NODES=2000000 -> their tournament, in absolute terms
+SF_NODES="${SF_NODES:-${RUNGS[${SLURM_ARRAY_TASK_ID:-1}]}}"
 
 # 1300 matches what our net received in ladder.slurm, so the two ladders are
 # directly comparable. Search_Type=mcts is MANDATORY -- the binary defaults to
