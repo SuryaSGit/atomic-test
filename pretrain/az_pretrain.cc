@@ -113,6 +113,29 @@ ABSL_FLAG(int, epoch_offset, 0,
 // Only used when the run directory has no graph_def yet. Prefer letting
 // alpha_zero_torch_example create it (see bootstrap_pretrained_run.sh) so the
 // architecture cannot drift from the RL config.
+ABSL_FLAG(double, policy_loss_weight, 1.0,
+          "Weight on the policy term. AlphaZero sums policy and value equally; "
+          "MultiAra's supervised recipe (Gehrke 2021 S4.3.2) used 0.99 policy / "
+          "0.01 value. Measured here, value accuracy is pinned at the label "
+          "ceiling (0.726 vs 0.725) while policy_top1 is 0.41 and still "
+          "improving -- so equal weighting spends trunk capacity on a head with "
+          "no headroom, starving the one MCTS actually consumes.");
+ABSL_FLAG(double, value_loss_weight, 1.0, "Weight on the value term.");
+ABSL_FLAG(std::string, lr_schedule, "none",
+          "none | onecycle. Our fixed 2e-4 is roughly three orders of magnitude "
+          "below the 0.35 peak of the one-cycle schedule MultiAra used, with no "
+          "annealing. This is the sharpest departure between the two recipes.");
+ABSL_FLAG(double, max_lr, 0.05,
+          "One-cycle peak. Gehrke used 0.35 with NAG; we still use Adam, which "
+          "wants a lower peak, so 0.05 is a starting point rather than a "
+          "transcription.");
+ABSL_FLAG(double, min_lr, 1e-5, "One-cycle floor, both ends of the cycle.");
+ABSL_FLAG(double, lr_warmup_frac, 0.3, "Fraction of steps spent ramping up.");
+ABSL_FLAG(int64_t, lr_total_steps, 0,
+          "Total learn steps the schedule spans. REQUIRED for onecycle -- the "
+          "reader is streaming, so the trainer cannot know it in advance. "
+          "Compute it as total_positions * reuse / batch_size; e.g. 66.3M "
+          "positions at reuse=4, batch=1024 gives ~259,000.");
 ABSL_FLAG(std::string, nn_model, "resnet", "resnet or mlp.");
 ABSL_FLAG(int, nn_width, 128, "Channels per residual block.");
 ABSL_FLAG(int, nn_depth, 10, "Residual blocks.");
@@ -244,6 +267,19 @@ ValStats Validate(az::VPNetModel* model,
 // directly comparable to one measured at the end of an epoch or in --epochs=0
 // mode. `edge` is the figure to compare across test sets; `result_sign_acc`
 // alone is not, because the base rate differs between them.
+// Linear warmup to max_lr, then cosine anneal back to min_lr. Past the end of
+// the schedule the rate stays at min_lr rather than wrapping.
+double OneCycleLR(int64_t step, int64_t total, double max_lr, double min_lr,
+                  double warmup_frac) {
+  if (total <= 0) return max_lr;
+  const double warm = std::max(1.0, warmup_frac * total);
+  if (step <= warm) {
+    return min_lr + (max_lr - min_lr) * (static_cast<double>(step) / warm);
+  }
+  const double t = std::min(1.0, (step - warm) / std::max(1.0, total - warm));
+  return min_lr + 0.5 * (max_lr - min_lr) * (1.0 + std::cos(M_PI * t));
+}
+
 void PrintVal(const ValStats& v, const std::string& label) {
   std::cout << label << "  value_mse " << v.value_mse << "  value_sign_acc "
             << v.value_sign_acc << "  result_mse " << v.result_mse
@@ -347,6 +383,33 @@ int main(int argc, char** argv) {
     model.LoadCheckpoint(init_ckpt);
   }
 
+  model.SetLossWeights(absl::GetFlag(FLAGS_policy_loss_weight),
+                       absl::GetFlag(FLAGS_value_loss_weight));
+  const std::string lr_sched = absl::GetFlag(FLAGS_lr_schedule);
+  const int64_t lr_total = absl::GetFlag(FLAGS_lr_total_steps);
+  const bool onecycle = (lr_sched == "onecycle");
+  if (onecycle && lr_total <= 0) {
+    std::cerr << "[pretrain] --lr_schedule=onecycle needs --lr_total_steps. "
+                 "Compute it as total_positions * reuse / batch_size."
+              << std::endl;
+    return 1;
+  }
+  if (!onecycle && lr_sched != "none") {
+    std::cerr << "[pretrain] unknown --lr_schedule " << lr_sched << std::endl;
+    return 1;
+  }
+  std::cout << "[pretrain] loss weights: policy "
+            << absl::GetFlag(FLAGS_policy_loss_weight) << " value "
+            << absl::GetFlag(FLAGS_value_loss_weight) << "; lr_schedule "
+            << lr_sched;
+  if (onecycle) {
+    std::cout << " (" << absl::GetFlag(FLAGS_min_lr) << " -> "
+              << absl::GetFlag(FLAGS_max_lr) << " -> "
+              << absl::GetFlag(FLAGS_min_lr) << " over " << lr_total
+              << " steps, warmup " << absl::GetFlag(FLAGS_lr_warmup_frac) << ")";
+  }
+  std::cout << std::endl;
+
   atomic_az::Filter filter;
   filter.min_elo = absl::GetFlag(FLAGS_min_elo);
   filter.min_plies = absl::GetFlag(FLAGS_min_plies);
@@ -430,6 +493,12 @@ int main(int argc, char** argv) {
     since_step = 0;
     ++step;
 
+    if (onecycle) {
+      model.SetLearningRate(OneCycleLR(step, lr_total,
+                                       absl::GetFlag(FLAGS_max_lr),
+                                       absl::GetFlag(FLAGS_min_lr),
+                                       absl::GetFlag(FLAGS_lr_warmup_frac)));
+    }
     window += model.Learn(buffer.Sample(&rng, batch_size));
 
     if (step % log_every == 0) {
@@ -438,7 +507,14 @@ int main(int argc, char** argv) {
                 << "  policy " << window.Policy() << "  value "
                 << window.Value() << "  l2 " << window.L2() << "  total "
                 << window.Total() << "  (" << (buffer.TotalAdded() / secs)
-                << " pos/s)" << std::endl;
+                << " pos/s)";
+      if (onecycle) {
+        std::cout << "  lr " << OneCycleLR(step, lr_total,
+                                           absl::GetFlag(FLAGS_max_lr),
+                                           absl::GetFlag(FLAGS_min_lr),
+                                           absl::GetFlag(FLAGS_lr_warmup_frac));
+      }
+      std::cout << std::endl;
       window = az::VPNetModel::LossInfo();
     }
     if (val_every > 0 && step % val_every == 0 && !val.empty()) {

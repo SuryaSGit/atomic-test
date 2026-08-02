@@ -66,6 +66,21 @@ NN_MODEL="${NN_MODEL:-resnet}"
 NN_WIDTH="${NN_WIDTH:-128}"
 NN_DEPTH="${NN_DEPTH:-10}"
 
+# MultiAra's supervised recipe (Gehrke 2021 S4.3.2), for comparison with ours:
+#   loss      0.99 policy / 0.01 value    ours: 1.0 / 1.0
+#   optimizer NAG + one-cycle, 0.35 peak  ours: Adam, fixed 2e-4
+#   epochs    7 (30 overfit)              ours: 4
+#   batch     512                         ours: 1024
+# The learning rate is the sharpest departure -- three orders of magnitude at
+# peak, with no annealing on our side. LR_TOTAL_STEPS is required for onecycle
+# and equals total_positions * reuse / batch_size.
+POLICY_LOSS_WEIGHT="${POLICY_LOSS_WEIGHT:-1.0}"
+VALUE_LOSS_WEIGHT="${VALUE_LOSS_WEIGHT:-1.0}"
+LR_SCHEDULE="${LR_SCHEDULE:-none}"
+MAX_LR="${MAX_LR:-0.05}"
+MIN_LR="${MIN_LR:-0.00001}"
+LR_TOTAL_STEPS="${LR_TOTAL_STEPS:-0}"
+
 # Fitted over all 18,967,523 labelled positions by minimising weighted SSE
 # between tanh(cp/K) and the observed outcome per centipawn bucket. Atomic
 # swings far exceed chess: the chess default of 400 saturates (tanh(1000/400)
@@ -134,6 +149,11 @@ fi
   --log_every=100 \
   --val_every=1000 \
   --save_every=1000 \
+  --policy_loss_weight="$POLICY_LOSS_WEIGHT" \
+  --value_loss_weight="$VALUE_LOSS_WEIGHT" \
+  --lr_schedule="$LR_SCHEDULE" \
+  --max_lr="$MAX_LR" --min_lr="$MIN_LR" \
+  --lr_total_steps="$LR_TOTAL_STEPS" \
   --nn_model="$NN_MODEL" --nn_width="$NN_WIDTH" --nn_depth="$NN_DEPTH" \
   2>&1 | tee -a "$RUN_DIR/pretrain.log"
 
