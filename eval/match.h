@@ -16,6 +16,7 @@
 #ifndef ATOMIC_AZ_EVAL_MATCH_H_
 #define ATOMIC_AZ_EVAL_MATCH_H_
 
+#include <cctype>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -90,10 +91,63 @@ struct MatchConfig {
   int seed = 1;
   bool verbose = false;
   std::string go_cmd = "go nodes 100000";
+  // EPD opening book. When set, opening_plies is ignored and each pair starts
+  // from a book position instead.
+  //
+  // This is not a cosmetic option. Uniformly random atomic openings are wild --
+  // many are already decided, which is why 5- and 7-ply decisive games appear
+  // in every random-opening run. Book positions are common, roughly balanced
+  // lines. Measured on this project, the same match scored ~80% at 4 random
+  // plies and 63.5% at 2, so the opening distribution is worth tens of points
+  // and a score without it stated is not interpretable.
+  //
+  // MultiAra's published tournaments used these books (<=5 plies, from
+  // github.com/ianfab/books), so this is the setting that makes a comparison
+  // with the literature like-for-like.
+  std::string book_path;
   // Optional: dump each game's move sequence (UCI, space separated) so the
   // positions can later be relabelled by Stockfish for an iteration round.
   std::string dump_games_path;
 };
+
+// Reads an EPD opening book. Each line is a position; EPD carries only the
+// first four FEN fields plus operations, so the halfmove/fullmove counters are
+// appended when absent.
+inline std::vector<std::string> LoadBook(const std::string& path) {
+  std::vector<std::string> out;
+  std::ifstream in(path);
+  if (!in) {
+    std::cerr << "cannot open opening book " << path << std::endl;
+    return out;
+  }
+  std::string line;
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty() || line[0] == '#') continue;
+    // EPD terminates the position with ';' and may append operations after it.
+    // ianfab/books writes "... - 2 3;", so without this the fullmove field
+    // parses as "3;" and the FEN is rejected.
+    const size_t semi = line.find(';');
+    if (semi != std::string::npos) line = line.substr(0, semi);
+    std::vector<std::string> tok;
+    {
+      std::istringstream iss(line);
+      std::string w;
+      while (iss >> w) tok.push_back(w);
+    }
+    if (tok.size() < 4) continue;
+    // Fields 5 and 6 are the counters; anything else at those positions is an
+    // EPD operation ("bm", "id", ...) and must not be treated as a counter.
+    const bool has_counters =
+        tok.size() >= 6 && !tok[4].empty() && !tok[5].empty() &&
+        std::isdigit(static_cast<unsigned char>(tok[4][0])) &&
+        std::isdigit(static_cast<unsigned char>(tok[5][0]));
+    std::string fen = tok[0] + " " + tok[1] + " " + tok[2] + " " + tok[3];
+    fen += has_counters ? (" " + tok[4] + " " + tok[5]) : " 0 1";
+    out.push_back(fen);
+  }
+  return out;
+}
 
 // Asks Fairy-Stockfish for a move and translates it through OUR board, so we
 // never apply something the atomic rules reject. kInvalidAction on failure.
@@ -142,10 +196,33 @@ inline MatchResult RunMatch(
   MatchResult res;
   std::mt19937 rng(cfg.seed);
 
+  std::vector<std::string> book;
+  if (!cfg.book_path.empty()) {
+    book = LoadBook(cfg.book_path);
+    if (book.empty()) {
+      std::cerr << "opening book is empty; refusing to run" << std::endl;
+      return res;
+    }
+    // A dumped game is replayed from the start position by sf_label, so a game
+    // that began mid-board cannot be reconstructed from its move list.
+    if (dump) {
+      std::cerr << "--dump_games cannot be combined with an opening book: the "
+                   "dump format replays from the initial position"
+                << std::endl;
+      return res;
+    }
+    std::cout << "opening book: " << book.size() << " positions from "
+              << cfg.book_path << std::endl;
+  }
+
   for (int p = 0; p < cfg.pairs; ++p) {
     // One opening per pair, shared by both colour assignments.
     std::vector<open_spiel::Action> opening;
-    {
+    std::string book_fen;
+    if (!book.empty()) {
+      book_fen = book[std::uniform_int_distribution<size_t>(
+          0, book.size() - 1)(rng)];
+    } else {
       auto s = game.NewInitialState();
       for (int i = 0; i < cfg.opening_plies && !s->IsTerminal(); ++i) {
         auto legal = s->LegalActions();
@@ -161,7 +238,8 @@ inline MatchResult RunMatch(
       sf->Restart();  // ucinewgame: no hash or history across games
       auto bot = make_bot(cfg.seed + p * 2 + side);
 
-      auto s = game.NewInitialState();
+      auto s = book_fen.empty() ? game.NewInitialState()
+                                : game.NewInitialState(book_fen);
       for (open_spiel::Action a : opening) s->ApplyAction(a);
 
       int ply = static_cast<int>(opening.size());

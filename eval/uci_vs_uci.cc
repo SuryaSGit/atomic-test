@@ -60,6 +60,12 @@ ABSL_FLAG(int, opening_plies, 4,
           "uniform random moves. Random atomic openings are far wilder and "
           "many are already decided -- a real difference from the published "
           "setup, and one that favours whichever engine trained on them.");
+ABSL_FLAG(std::string, book, "",
+          "EPD opening book (e.g. ianfab/books atomic.epd). Overrides "
+          "--opening_plies. Random openings and book positions give very "
+          "different scores -- measured 80% vs 63.5% for the same match at 4 "
+          "vs 2 random plies -- so the opening source belongs in any reported "
+          "result. MultiAra's published tournaments used these books.");
 ABSL_FLAG(int, max_plies, 400, "Ply cap; games hitting it are excluded.");
 ABSL_FLAG(int, seed, 1, "RNG seed for openings.");
 ABSL_FLAG(bool, verbose, false, "Print each game's moves.");
@@ -132,6 +138,7 @@ int main(int argc, char** argv) {
   cfg.opening_plies = absl::GetFlag(FLAGS_opening_plies);
   cfg.max_plies = absl::GetFlag(FLAGS_max_plies);
   cfg.seed = absl::GetFlag(FLAGS_seed);
+  cfg.book_path = absl::GetFlag(FLAGS_book);
   cfg.verbose = absl::GetFlag(FLAGS_verbose);
   cfg.go_cmd = absl::StrCat("go nodes ", e2_nodes);
 
@@ -142,8 +149,11 @@ int main(int argc, char** argv) {
 
   std::cout << absl::GetFlag(FLAGS_e1_name) << "(" << e1_nodes << " nodes) vs "
             << absl::GetFlag(FLAGS_e2_name) << "(" << e2_nodes << " nodes)\n"
-            << cfg.pairs << " colour-swapped pairs, opening_plies="
-            << cfg.opening_plies << "\n"
+            << cfg.pairs << " colour-swapped pairs, openings="
+            << (cfg.book_path.empty()
+                    ? absl::StrCat(cfg.opening_plies, " random plies")
+                    : absl::StrCat("book ", cfg.book_path))
+            << "\n"
             << std::endl;
 
   atomic_az::MatchResult res = atomic_az::RunMatch(*game, &e2, make_bot, cfg);

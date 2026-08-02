@@ -102,6 +102,12 @@ ABSL_FLAG(int, games, 40, "Total games. Rounded down to an even number of "
 ABSL_FLAG(int, opening_plies, 4,
           "Random plies used to diversify each opening. Both games of a pair "
           "start from the same opening, with colours swapped.");
+ABSL_FLAG(std::string, book, "",
+          "EPD opening book (e.g. ianfab/books atomic.epd). Overrides "
+          "--opening_plies. Random openings and book positions give very "
+          "different scores -- measured 80% vs 63.5% for the same match at 4 "
+          "vs 2 random plies -- so the opening source belongs in any reported "
+          "result. MultiAra's published tournaments used these books.");
 ABSL_FLAG(int, max_plies, 400, "Ply cap; games hitting it are excluded.");
 ABSL_FLAG(int, seed, 1, "RNG seed for openings and MCTS.");
 ABSL_FLAG(bool, verbose, false, "Print each game's moves.");
@@ -184,6 +190,7 @@ int main(int argc, char** argv) {
   cfg.opening_plies = absl::GetFlag(FLAGS_opening_plies);
   cfg.max_plies = absl::GetFlag(FLAGS_max_plies);
   cfg.seed = absl::GetFlag(FLAGS_seed);
+  cfg.book_path = absl::GetFlag(FLAGS_book);
   cfg.verbose = absl::GetFlag(FLAGS_verbose);
   cfg.go_cmd = go_cmd;
   cfg.dump_games_path = absl::GetFlag(FLAGS_dump_games);
@@ -205,7 +212,12 @@ int main(int argc, char** argv) {
     std::cout << ", UCI_Elo=" << absl::GetFlag(FLAGS_sf_elo);
   else if (absl::GetFlag(FLAGS_sf_skill) >= 0)
     std::cout << ", skill=" << absl::GetFlag(FLAGS_sf_skill);
-  std::cout << ")\n" << cfg.pairs << " colour-swapped pairs\n" << std::endl;
+  std::cout << ")\n" << cfg.pairs << " colour-swapped pairs, openings="
+            << (cfg.book_path.empty()
+                    ? absl::StrCat(absl::GetFlag(FLAGS_opening_plies),
+                                   " random plies")
+                    : absl::StrCat("book ", cfg.book_path))
+            << "\n" << std::endl;
 
   // --- value-head calibration on our own positions -------------------------
   // The raw network value, without search, at every position we had to move in.

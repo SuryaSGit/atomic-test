@@ -54,6 +54,10 @@ CKPT="${CKPT:--1}"
 # mean 10 in hard/) and MultiAra's is not, so the default setting tests us in
 # our home distribution and them outside theirs. OPENING_PLIES=2 is the control.
 OPENING_PLIES="${OPENING_PLIES:-4}"
+# EPD book (ianfab/books atomic.epd). Overrides OPENING_PLIES. This is the
+# setting MultiAra was actually tested under; random openings favour whichever
+# engine trained on them, and ours did.
+BOOK="${BOOK:-}"
 # Threads affects MultiAra's speed and, through virtual loss, introduces some
 # nondeterminism. Recorded rather than tuned.
 MA_THREADS="${MA_THREADS:-4}"
@@ -77,7 +81,7 @@ MA_OPTS="${MA_OPTS:-Search_Type=mcts,Allow_Early_Stopping=false,Centi_Epsilon_Gr
 [[ -x "$MA" ]] || { echo "MultiAra wrapper not found at $MA"; exit 1; }
 
 nvidia-smi --query-gpu=name --format=csv,noheader
-echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS opening_plies=$OPENING_PLIES"
+echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS opening_plies=$OPENING_PLIES book=$BOOK"
 
 "$BUILD/examples/az_vs_sf" \
   --az_path="$RUN_DIR" \
@@ -87,6 +91,7 @@ echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS op
   --sf_opt="$MA_OPTS" \
   --games="$GAMES" \
   --opening_plies="$OPENING_PLIES" \
+  --book="$BOOK" \
   --sf_nodes="$SIMS" \
   --az_sims="$SIMS" \
   --device=/cuda:0 \
