@@ -50,6 +50,21 @@ EPOCH_OFFSET="${EPOCH_OFFSET:-0}"
 # reader takes a large share of wall time -- at the cost of seeing each position
 # more often.
 REUSE="${REUSE:-4}"
+# Games read PER FILE per epoch (-1 = all). This is how arms are held to equal
+# samples seen. Arm A trains on 7 base shards; arm B on 14 (base + hard). At
+# max_games=-1 arm B would see ~1.8x the data per epoch, so a same-epochs
+# comparison would confound data VOLUME with data COMPOSITION -- and
+# composition is the entire claim. Halve it for the 14-file arms.
+MAX_GAMES="${MAX_GAMES:--1}"
+# Architecture. 128x10 (~6M params) was sized for SELF-PLAY throughput, where
+# the actor data rate is the scarce resource. Supervised distillation has no
+# such constraint -- the data is already on disk -- and the policy head is far
+# from its ceiling (policy_top1 ~0.41) even where the value head is pinned at
+# it. These flags are IGNORED if RUN_DIR already contains a vpnet.pb, so a
+# different size needs a fresh RUN_DIR.
+NN_MODEL="${NN_MODEL:-resnet}"
+NN_WIDTH="${NN_WIDTH:-128}"
+NN_DEPTH="${NN_DEPTH:-10}"
 
 # Fitted over all 18,967,523 labelled positions by minimising weighted SSE
 # between tanh(cp/K) and the observed outcome per centipawn bucket. Atomic
@@ -62,13 +77,30 @@ CP_SCALE="${CP_SCALE:-1580}"
 LAMBDA="${LAMBDA:-0.8}"
 POLICY_TEMP="${POLICY_TEMP:-100}"
 
-TRAIN=""
-for f in "$DATA"/atomic.*.tsv; do
-  [[ -e "$f" ]] || { echo "no data in $DATA"; exit 1; }
-  [[ "$f" == *".${HOLDOUT}.tsv" ]] && continue
-  TRAIN="${TRAIN:+$TRAIN,}$f"
-done
-VAL="$DATA/atomic.${HOLDOUT}.tsv"
+# TRAIN_TSV / VAL_TSV override the glob entirely. The glob only ever sees ONE
+# directory, so the ablation arms -- which mix $DATA with $DATA/hard and the
+# relabelled own-play set -- cannot be expressed through it. Pass explicit
+# comma-separated lists instead:
+#
+#   arm A: TRAIN_TSV="$(ls -m $DATA/atomic.[0-6].tsv | tr -d ' \n')"
+#   arm B: arm A + $DATA/hard/atomic.[0-6].tsv
+#   arm C: arm B + the relabelled dagger_train tsv
+#   all  : VAL_TSV=$DATA/t3_ownplay.tsv   (the frozen own-play test set)
+#
+# Whatever you pass, the holdout must NOT appear in the training list. Nothing
+# here can check that for you -- an explicit list is exactly as careful as the
+# person who wrote it.
+if [[ -n "${TRAIN_TSV:-}" ]]; then
+  TRAIN="$TRAIN_TSV"
+else
+  TRAIN=""
+  for f in "$DATA"/atomic.*.tsv; do
+    [[ -e "$f" ]] || { echo "no data in $DATA"; exit 1; }
+    [[ "$f" == *".${HOLDOUT}.tsv" ]] && continue
+    TRAIN="${TRAIN:+$TRAIN,}$f"
+  done
+fi
+VAL="${VAL_TSV:-$DATA/atomic.${HOLDOUT}.tsv}"
 [[ -s "$VAL" ]] || { echo "holdout shard $VAL missing"; exit 1; }
 
 nvidia-smi
@@ -93,6 +125,7 @@ fi
   --sf_cp_scale="$CP_SCALE" \
   --sf_policy_temp="$POLICY_TEMP" \
   --epochs="$EPOCHS" \
+  --max_games="$MAX_GAMES" \
   --init_checkpoint="$INIT_CHECKPOINT" \
   --epoch_offset="$EPOCH_OFFSET" \
   --batch_size=1024 \
@@ -101,7 +134,7 @@ fi
   --log_every=100 \
   --val_every=1000 \
   --save_every=1000 \
-  --nn_model=resnet --nn_width=128 --nn_depth=10 \
+  --nn_model="$NN_MODEL" --nn_width="$NN_WIDTH" --nn_depth="$NN_DEPTH" \
   2>&1 | tee -a "$RUN_DIR/pretrain.log"
 
 echo
