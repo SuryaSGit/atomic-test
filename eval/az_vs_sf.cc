@@ -41,6 +41,7 @@
 #include "open_spiel/abseil-cpp/absl/flags/flag.h"
 #include "open_spiel/abseil-cpp/absl/flags/parse.h"
 #include "open_spiel/abseil-cpp/absl/strings/str_cat.h"
+#include "open_spiel/abseil-cpp/absl/strings/str_split.h"
 #include "open_spiel/algorithms/alpha_zero_torch/device_manager.h"
 #include "open_spiel/algorithms/alpha_zero_torch/vpevaluator.h"
 #include "open_spiel/algorithms/alpha_zero_torch/vpnet.h"
@@ -74,6 +75,23 @@ ABSL_FLAG(int, sf_skill, -1,
           "which is a smooth dial rather than 21 blunder-injecting steps.");
 ABSL_FLAG(int, sf_elo, 0,
           "If > 0, sets UCI_LimitStrength + UCI_Elo (~1350-2850).");
+ABSL_FLAG(std::string, opponent_name, "Fairy-Stockfish",
+          "Label for the opponent in the printed header. These logs are the "
+          "record of what was played; a hardcoded name makes a MultiAra match "
+          "read as a Stockfish one.");
+ABSL_FLAG(std::string, sf_opt, "",
+          "Extra UCI options, 'Name=Value' comma separated, applied after the "
+          "defaults. Needed for non-Stockfish opponents. For MultiAra at "
+          "atomic, Search_Type=mcts is MANDATORY: the binary defaults to mcgs, "
+          "and Gehrke 2021 S4.4.5 abandoned MCGS for atomic because it "
+          "'regularly generated NaN' -- 'which is why we decided to train "
+          "Atomic with MCTS'. Also worth pinning Allow_Early_Stopping=false "
+          "for a strict node match and Centi_Epsilon_Greedy=0 to remove search "
+          "exploration meant for self-play.");
+ABSL_FLAG(int, sf_hash, 256,
+          "Fairy-Stockfish hash, MB. Sized for the node budget: the default "
+          "16MB saturates well before 650k nodes/move. Fixed and reported "
+          "because atomic scores are hash-sensitive.");
 ABSL_FLAG(bool, sf_nnue, false,
           "Leave Stockfish's NNUE on. Default false: parity with the CLASSICAL "
           "evaluation is the milestone (MultiAra reached it; it lost to NNUE "
@@ -126,6 +144,24 @@ int main(int argc, char** argv) {
   uci::Options opts;
   opts["UCI_Variant"] = "atomic";
   opts["Use NNUE"] = absl::GetFlag(FLAGS_sf_nnue) ? "true" : "false";
+  // Hash must be set explicitly and RECORDED. Fairy-SF's default saturates
+  // (hashfull 988/1000 by 3M nodes), and atomic evaluations are strongly
+  // hash-dependent -- measured: changing 64MB -> 1MB moved 35 of 77 scores,
+  // mean |delta| 147cp, on identical positions at identical node counts. Two
+  // runs at different hash sizes are not comparable.
+  opts["Hash"] = std::to_string(absl::GetFlag(FLAGS_sf_hash));
+  // Applied last so they can override any default above. An engine that does
+  // not know an option reports it and continues ("Given option Hash does not
+  // exist"), so passing Stockfish-specific names to MultiAra is harmless.
+  for (absl::string_view kv :
+       absl::StrSplit(absl::GetFlag(FLAGS_sf_opt), ',', absl::SkipEmpty())) {
+    const size_t eq = kv.find('=');
+    if (eq == absl::string_view::npos) {
+      std::cerr << "--sf_opt entry '" << kv << "' is not Name=Value\n";
+      return 1;
+    }
+    opts[std::string(kv.substr(0, eq))] = std::string(kv.substr(eq + 1));
+  }
   if (absl::GetFlag(FLAGS_sf_elo) > 0) {
     opts["UCI_LimitStrength"] = "true";
     opts["UCI_Elo"] = std::to_string(absl::GetFlag(FLAGS_sf_elo));
@@ -163,7 +199,7 @@ int main(int argc, char** argv) {
   };
 
   std::cout << "AZ(" << absl::GetFlag(FLAGS_az_sims) << " sims) vs "
-            << "Fairy-Stockfish(atomic, " << go_cmd
+            << absl::GetFlag(FLAGS_opponent_name) << "(atomic, " << go_cmd
             << ", NNUE=" << (absl::GetFlag(FLAGS_sf_nnue) ? "on" : "off");
   if (absl::GetFlag(FLAGS_sf_elo) > 0)
     std::cout << ", UCI_Elo=" << absl::GetFlag(FLAGS_sf_elo);
@@ -201,36 +237,65 @@ int main(int argc, char** argv) {
 
   atomic_az::MatchResult res =
       atomic_az::RunMatch(*game, &sf, make_bot, cfg, pos_hook, res_hook);
-  atomic_az::PrintResult(res, "AZ vs Fairy-Stockfish");
+  atomic_az::PrintResult(res, absl::StrCat("AZ vs ", absl::GetFlag(FLAGS_opponent_name)));
 
   if (calib && !all_values.empty()) {
-    int64_t sign_ok = 0;
-    double sse = 0;
+    int64_t sign_ok = 0, res_pos = 0, pred_pos = 0;
+    double sse = 0, pred_sum = 0, pred_sumsq = 0;
     for (size_t i = 0; i < all_values.size(); ++i) {
       sign_ok += ((all_values[i] >= 0) == (all_results[i] >= 0)) ? 1 : 0;
       const double d = all_values[i] - all_results[i];
       sse += d * d;
+      if (all_results[i] > 0) res_pos += 1;
+      if (all_values[i] >= 0) pred_pos += 1;
+      pred_sum += all_values[i];
+      pred_sumsq += all_values[i] * all_values[i];
     }
-    const double acc = static_cast<double>(sign_ok) / all_values.size();
+    const double n = static_cast<double>(all_values.size());
+    const double acc = sign_ok / n;
+    // The majority-class baseline on THESE positions. Comparing raw accuracy
+    // across test sets is invalid when their base rates differ, and ours have
+    // ranged from 0.54 to 0.65. Measured on this project, the same degradation
+    // read as 0.618 (base 0.617) and 0.707 (base 0.648) -- identical in edge,
+    // 9pp apart in accuracy, and a fixed-threshold verdict called the second
+    // one "capacity, not shift". Report the edge.
+    const double p = res_pos / n;
+    const double base = std::max(p, 1.0 - p);
+    const double edge = acc - base;
+    const double mean = pred_sum / n;
+    const double sd = std::sqrt(std::max(0.0, pred_sumsq / n - mean * mean));
+    // Reference edge on the teacher's distribution: 0.711 accuracy against a
+    // 0.540 base rate on the held-out SF-vs-SF shard.
+    const double kRefEdge = 0.711 - 0.540;
     std::cout << "\n========== VALUE HEAD ON OUR OWN POSITIONS ==========\n"
               << "positions        : " << all_values.size()
               << "  (decisive games only)\n"
               << "result_sign_acc  : " << acc << "\n"
-              << "mse vs outcome   : " << (sse / all_values.size()) << "\n"
-              << "reference        : 0.711 on held-out SF-vs-SF positions, "
-                 "against a measured ceiling of 0.725\n";
-    if (acc < 0.60) {
-      std::cout << "READ: far below the training-distribution figure. This is "
-                   "distribution shift -- the net is unreliable on the "
-                   "positions it actually reaches. Relabelling its own games "
-                   "(iteration) addresses this; more capacity would not.\n";
-    } else if (acc < 0.68) {
-      std::cout << "READ: moderately below the training-distribution figure. "
-                   "Some distribution shift, but not the whole story.\n";
+              << "majority baseline: " << base << "\n"
+              << "EDGE over base   : " << edge << "\n"
+              << "mse vs outcome   : " << (sse / n) << "\n"
+              << "prediction mean  : " << mean << "  sd " << sd
+              << "  frac>=0 " << (pred_pos / n) << "\n"
+              << "reference edge   : " << kRefEdge
+              << " on held-out SF-vs-SF positions (0.711 acc vs 0.540 base)\n";
+    const double retained = kRefEdge > 0 ? edge / kRefEdge : 0.0;
+    std::cout << "retained         : " << (100.0 * retained)
+              << "% of the teacher-distribution edge\n";
+    if (edge < 0.02) {
+      std::cout << "READ: at or below the majority-class baseline. The value "
+                   "head is not using the board on these positions at all.\n";
+    } else if (retained < 0.60) {
+      std::cout << "READ: most of the edge is lost off the teacher's "
+                   "distribution. That is shift; relabelling our own games "
+                   "addresses it, more capacity would not.\n";
     } else {
-      std::cout << "READ: comparable to the training-distribution figure, so "
-                   "the value head generalises to its own positions. The "
-                   "bottleneck is capacity or policy quality, not shift.\n";
+      std::cout << "READ: the edge largely survives on our own positions, so "
+                   "shift is not the binding constraint. Look at capacity and "
+                   "policy quality.\n";
+    }
+    if (sd < 0.10) {
+      std::cout << "READ: predictions are nearly constant (sd " << sd
+                << "); a fixed output scores the baseline on a skewed set.\n";
     }
   }
   return 0;

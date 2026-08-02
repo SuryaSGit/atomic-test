@@ -258,10 +258,21 @@ inline void PrintResult(const MatchResult& res, const std::string& header) {
   }
   if (res.as_white.n() > 0 && res.as_black.n() > 0) {
     const double gap = res.as_white.score() - res.as_black.score();
-    if (std::fabs(gap) > 0.25) {
+    // 0.15, not 0.25: runs scoring 23.3/0.0 and 62.1/41.0 both stayed silent
+    // under the old threshold, and the first of those had a colour that never
+    // won a single game.
+    if (std::fabs(gap) > 0.15) {
       std::cout << "NOTE: colour gap of " << (100.0 * gap)
                 << "pp -- the overall figure averages two very different "
                    "results and is not a single strength." << std::endl;
+    }
+    // A shut-out is worth flagging at any gap: it usually means one colour is
+    // broken rather than weak.
+    if ((res.as_white.win == 0 && res.as_white.n() >= 20) ||
+        (res.as_black.win == 0 && res.as_black.n() >= 20)) {
+      std::cout << "NOTE: one colour did not win a single game -- treat the "
+                   "aggregate as meaningless until that is explained."
+                << std::endl;
     }
   }
   if (all.n() < 100 && all.n() > 0) {

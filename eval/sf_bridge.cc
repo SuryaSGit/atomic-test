@@ -44,6 +44,9 @@ ABSL_FLAG(std::string, sweep, "",
 ABSL_FLAG(std::string, elo_sweep, "",
           "Comma-separated UCI_Elo values to sweep instead of node counts.");
 ABSL_FLAG(int, sf_nodes, 10000, "Nodes per SF move for a single rung.");
+ABSL_FLAG(int, sf_hash, 256,
+          "Fairy-Stockfish hash, MB. Fixed and reported: atomic scores are "
+          "hash-sensitive (see az_vs_sf.cc).");
 ABSL_FLAG(bool, sf_nnue, false,
           "Leave NNUE on. Default false: the classical evaluation is the "
           "milestone opponent.");
@@ -105,6 +108,8 @@ int main(int argc, char** argv) {
     uci::Options opts;
     opts["UCI_Variant"] = "atomic";
     opts["Use NNUE"] = absl::GetFlag(FLAGS_sf_nnue) ? "true" : "false";
+    // See az_vs_sf.cc: fixed and recorded, because atomic scores move with it.
+    opts["Hash"] = std::to_string(absl::GetFlag(FLAGS_sf_hash));
     int limit;
     if (!elo_sweep.empty()) {
       opts["UCI_LimitStrength"] = "true";
