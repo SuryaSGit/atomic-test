@@ -62,8 +62,12 @@ ABSL_FLAG(std::string, sf_tsv, "",
 ABSL_FLAG(std::string, val_sf_tsv, "", "Held-out sf_label .tsv for validation.");
 ABSL_FLAG(double, sf_lambda, 0.7,
           "value = lambda*tanh(cp/sf_cp_scale) + (1-lambda)*game_result.");
-ABSL_FLAG(double, sf_cp_scale, 400.0,
-          "Centipawns mapped to |value| ~ 0.76. Calibrate for atomic.");
+ABSL_FLAG(double, sf_cp_scale, 1580.0,
+          "Centipawns mapped to |value| ~ 0.76. 1580 is the atomic fit over "
+          "33.7M positions; the chess default of 400 saturates (tanh(1000/400)"
+          " = 0.99 where the observed win rate at +1000cp is 0.56). NOTE the "
+          "fit is phase-dependent -- ~2800-3000 early, ~1500-1800 mid, "
+          "~1100-1200 late -- so 1580 is a compromise, not a constant.");
 ABSL_FLAG(double, sf_policy_temp, 0.0,
           "Softmax temperature (cp) over MultiPV. 0 = one-hot on SF's best.");
 ABSL_FLAG(int, sf_max_abs_cp, 0,
@@ -137,6 +141,22 @@ struct ValStats {
   int64_t n = 0;
   int64_t n_decisive = 0;
   int64_t n_result = 0;
+
+  // Accuracy alone is uninterpretable: it depends on how skewed the test set
+  // is. Measured on this project, the SAME degradation read as 0.618 (base
+  // 0.617, i.e. NO information) on one set and 0.707 (base 0.648) on another,
+  // and a fixed-threshold verdict called the second one "comparable to the
+  // training distribution -- the bottleneck is capacity, not shift". It was
+  // not. Always report the edge over the majority-class baseline.
+  double result_base_rate = 0;  // accuracy of always predicting the commoner winner
+  double result_edge = 0;       // result_sign_acc - result_base_rate
+
+  // Distribution of the predictions themselves. A near-constant output is the
+  // signature of a value head that has learned the base rate and nothing else,
+  // and it is invisible in an accuracy number.
+  double pred_mean = 0;
+  double pred_sd = 0;
+  double pred_frac_pos = 0;
 };
 
 ValStats Validate(az::VPNetModel* model,
@@ -145,6 +165,8 @@ ValStats Validate(az::VPNetModel* model,
   if (val.empty()) return out;
   int64_t sign_ok = 0, top1_ok = 0, result_sign_ok = 0;
   double sse = 0, result_sse = 0;
+  int64_t result_pos = 0, pred_pos = 0;   // for the base rate and pred skew
+  double pred_sum = 0, pred_sumsq = 0;
 
   for (size_t i = 0; i < val.size(); i += batch_size) {
     const size_t end = std::min(val.size(), i + batch_size);
@@ -174,7 +196,11 @@ ValStats Validate(az::VPNetModel* model,
         result_sse += rdiff * rdiff;
         out.n_result += 1;
         if ((outputs[j].value >= 0) == (s.game_result >= 0)) result_sign_ok += 1;
+        if (s.game_result > 0) result_pos += 1;
       }
+      pred_sum += outputs[j].value;
+      pred_sumsq += outputs[j].value * outputs[j].value;
+      if (outputs[j].value >= 0) pred_pos += 1;
       Action best = open_spiel::kInvalidAction;
       double best_p = -1.0;
       for (const auto& [action, prob] : outputs[j].policy) {
@@ -198,7 +224,45 @@ ValStats Validate(az::VPNetModel* model,
   out.result_sign_acc =
       out.n_result > 0 ? static_cast<double>(result_sign_ok) / out.n_result
                        : 0.0;
+
+  // Majority-class baseline over the SAME positions the accuracy is measured
+  // on. Predicting "whoever wins more often here" every time scores this, with
+  // no knowledge of the board at all.
+  if (out.n_result > 0) {
+    const double p = static_cast<double>(result_pos) / out.n_result;
+    out.result_base_rate = std::max(p, 1.0 - p);
+    out.result_edge = out.result_sign_acc - out.result_base_rate;
+  }
+  out.pred_mean = pred_sum / out.n;
+  const double var = pred_sumsq / out.n - out.pred_mean * out.pred_mean;
+  out.pred_sd = std::sqrt(std::max(0.0, var));
+  out.pred_frac_pos = static_cast<double>(pred_pos) / out.n;
   return out;
+}
+
+// One format for every validation report, so a number measured mid-training is
+// directly comparable to one measured at the end of an epoch or in --epochs=0
+// mode. `edge` is the figure to compare across test sets; `result_sign_acc`
+// alone is not, because the base rate differs between them.
+void PrintVal(const ValStats& v, const std::string& label) {
+  std::cout << label << "  value_mse " << v.value_mse << "  value_sign_acc "
+            << v.value_sign_acc << "  result_mse " << v.result_mse
+            << "  policy_top1 " << v.policy_top1 << "  (n=" << v.n << ")\n"
+            << "    outcome: acc " << v.result_sign_acc << "  base "
+            << v.result_base_rate << "  EDGE " << v.result_edge << "  (n="
+            << v.n_result << ")\n"
+            << "    pred   : mean " << v.pred_mean << "  sd " << v.pred_sd
+            << "  frac>=0 " << v.pred_frac_pos << std::endl;
+  if (v.n_result > 0 && v.result_edge < 0.02) {
+    std::cout << "    READ: at or below the majority-class baseline -- the "
+                 "value head is not using the board on these positions."
+              << std::endl;
+  }
+  if (v.pred_sd < 0.10) {
+    std::cout << "    READ: predictions are nearly constant (sd " << v.pred_sd
+              << "); a fixed output can score well on a skewed set."
+              << std::endl;
+  }
 }
 
 std::vector<std::string> SplitFiles(const std::string& csv) {
@@ -222,7 +286,10 @@ int main(int argc, char** argv) {
   }
   std::vector<std::string> pgn_files = SplitFiles(absl::GetFlag(FLAGS_pgn));
   std::vector<std::string> sf_files = SplitFiles(absl::GetFlag(FLAGS_sf_tsv));
-  if (pgn_files.empty() && sf_files.empty()) {
+  // --epochs=0 is validation-only: score an existing checkpoint against a
+  // held-out set and exit. No training data needed, and nothing is written.
+  const bool validate_only = absl::GetFlag(FLAGS_epochs) <= 0;
+  if (pgn_files.empty() && sf_files.empty() && !validate_only) {
     std::cerr << "Need --pgn (human games) and/or --sf_tsv (Stockfish "
                  "distillation). Both feed the same shuffle buffer."
               << std::endl;
@@ -264,7 +331,17 @@ int main(int argc, char** argv) {
   }
 
   az::VPNetModel model(*game, path, graph_def, absl::GetFlag(FLAGS_device));
-  const int init_ckpt = absl::GetFlag(FLAGS_init_checkpoint);
+  int init_ckpt = absl::GetFlag(FLAGS_init_checkpoint);
+  // -2 means "fresh weights", which is right for training but silently scores a
+  // RANDOMLY INITIALISED net in validation-only mode. Default to the latest
+  // checkpoint there instead; measuring noise and reporting it as a baseline is
+  // the worst available failure.
+  if (validate_only && init_ckpt == -2) {
+    std::cout << "[pretrain] --epochs=0 with no --init_checkpoint; defaulting "
+                 "to -1 (latest) rather than validating random weights."
+              << std::endl;
+    init_ckpt = -1;
+  }
   if (init_ckpt != -2) {
     std::cout << "[pretrain] loading checkpoint " << init_ckpt << std::endl;
     model.LoadCheckpoint(init_ckpt);
@@ -322,6 +399,19 @@ int main(int argc, char** argv) {
                  "starts overfitting." << std::endl;
   }
 
+  // Validation-only: measure and exit without touching the checkpoints. This is
+  // how a "before" number is taken -- the same code path, and therefore the
+  // same measurement, that every later arm is scored with.
+  if (validate_only) {
+    if (val.empty()) {
+      std::cerr << "[pretrain] --epochs=0 needs --val_sf_tsv or --val_pgn."
+                << std::endl;
+      return 1;
+    }
+    PrintVal(Validate(&model, val, batch_size), "[pretrain] VALIDATE-ONLY");
+    return 0;
+  }
+
   open_spiel::CircularBuffer<az::VPNetModel::TrainInputs> buffer(
       absl::GetFlag(FLAGS_buffer_size));
   std::mt19937 rng(absl::GetFlag(FLAGS_seed));
@@ -353,11 +443,7 @@ int main(int argc, char** argv) {
     }
     if (val_every > 0 && step % val_every == 0 && !val.empty()) {
       ValStats v = Validate(&model, val, batch_size);
-      std::cout << "  VAL step " << step << "  value_mse " << v.value_mse
-                << "  value_sign_acc " << v.value_sign_acc
-                << "  result_sign_acc " << v.result_sign_acc
-                << "  policy_top1 " << v.policy_top1 << "  (n=" << v.n << ")"
-                << std::endl;
+      PrintVal(v, absl::StrCat("  VAL step ", step));
     }
     if (save_every > 0 && step % save_every == 0) {
       model.SaveCheckpoint(az::VPNetModel::kMostRecentCheckpointStep);
@@ -415,11 +501,7 @@ int main(int argc, char** argv) {
               << std::endl;
     if (!val.empty()) {
       ValStats v = Validate(&model, val, batch_size);
-      std::cout << "[pretrain] EPOCH " << epoch_label << " VAL  value_mse "
-                << v.value_mse << "  value_sign_acc " << v.value_sign_acc
-                << "  result_mse " << v.result_mse
-                << "  result_sign_acc " << v.result_sign_acc
-                << "  policy_top1 " << v.policy_top1 << std::endl;
+      PrintVal(v, absl::StrCat("[pretrain] EPOCH ", epoch_label, " VAL"));
     }
   }
 
