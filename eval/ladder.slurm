@@ -47,6 +47,11 @@ AZ_SIMS="${AZ_SIMS:-1300}"
 # nodes) and atomic scores move with hash size -- measured 147cp mean shift
 # between 64MB and 1MB on identical positions.
 SF_HASH="${SF_HASH:-256}"
+# EPD opening book (ianfab/books atomic.epd), the condition MultiAra was
+# actually tested under. Overrides the random-ply openings. Both ladders
+# must use the SAME setting or the comparison is meaningless.
+BOOK="${BOOK:-}"
+
 CKPT="${CKPT:--1}"
 
 [[ -x "$BUILD/examples/az_vs_sf" ]] || { echo "az_vs_sf not built"; exit 1; }
@@ -54,7 +59,7 @@ CKPT="${CKPT:--1}"
 
 nvidia-smi --query-gpu=name --format=csv,noheader
 echo "[ladder] rung=${SLURM_ARRAY_TASK_ID:-4} sf_nodes=$NODES az_sims=$AZ_SIMS" \
-     "games=$GAMES hash=${SF_HASH}MB run_dir=$RUN_DIR sf=$SF"
+     "games=$GAMES hash=${SF_HASH}MB book=$BOOK run_dir=$RUN_DIR sf=$SF"
 
 "$BUILD/examples/az_vs_sf" \
   --az_path="$RUN_DIR" \
@@ -64,6 +69,7 @@ echo "[ladder] rung=${SLURM_ARRAY_TASK_ID:-4} sf_nodes=$NODES az_sims=$AZ_SIMS" 
   --sf_nodes="$NODES" \
   --sf_hash="$SF_HASH" \
   --az_sims="$AZ_SIMS" \
+  --book="$BOOK" \
   --sf_nnue=false \
   --value_calibration=false \
   --device=/cuda:0

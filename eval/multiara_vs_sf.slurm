@@ -52,12 +52,17 @@ MA_NODES="${MA_NODES:-1300}"
 MA_OPTS="${MA_OPTS:-Search_Type=mcts,Allow_Early_Stopping=false,Centi_Epsilon_Greedy=0,Threads=${SLURM_CPUS_PER_TASK:-8}}"
 SF_HASH="${SF_HASH:-256}"
 GAMES="${GAMES:-100}"
+# EPD opening book (ianfab/books atomic.epd), the condition MultiAra was
+# actually tested under. Overrides the random-ply openings. Both ladders
+# must use the SAME setting or the comparison is meaningless.
+BOOK="${BOOK:-}"
+
 
 [[ -x "$BIN" ]] || { echo "uci_vs_uci not built at $BIN"; exit 1; }
 [[ -x "$MA" ]] || { echo "MultiAra wrapper not found at $MA"; exit 1; }
 [[ -x "$SF" ]] || { echo "Fairy-Stockfish 13.1 not found at $SF"; exit 1; }
 
-echo "[ma_vs_sf] ma_nodes=$MA_NODES sf_nodes=$SF_NODES games=$GAMES hash=${SF_HASH}MB"
+echo "[ma_vs_sf] ma_nodes=$MA_NODES sf_nodes=$SF_NODES games=$GAMES hash=${SF_HASH}MB book=$BOOK"
 date
 
 stdbuf -oL "$BIN" \
@@ -69,6 +74,7 @@ stdbuf -oL "$BIN" \
   --e2_name="Fairy-SF-13.1" \
   --e2_nodes="$SF_NODES" \
   --e2_opt="Hash=${SF_HASH}" \
+  --book="$BOOK" \
   --games="$GAMES"
 
 date
