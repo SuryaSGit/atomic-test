@@ -58,8 +58,9 @@ CKPT="${CKPT:--1}"
 [[ -x "$SF" ]] || { echo "Fairy-Stockfish 13.1 not found at $SF"; exit 1; }
 
 nvidia-smi --query-gpu=name --format=csv,noheader
+if [[ -n "$BOOK" ]]; then OPENINGS="openings=book:$BOOK"; else OPENINGS="openings=random-plies(harness default)"; fi
 echo "[ladder] rung=${SLURM_ARRAY_TASK_ID:-4} sf_nodes=$NODES az_sims=$AZ_SIMS" \
-     "games=$GAMES hash=${SF_HASH}MB book=$BOOK run_dir=$RUN_DIR sf=$SF"
+     "games=$GAMES hash=${SF_HASH}MB $OPENINGS run_dir=$RUN_DIR sf=$SF"
 
 "$BUILD/examples/az_vs_sf" \
   --az_path="$RUN_DIR" \

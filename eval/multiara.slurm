@@ -81,7 +81,11 @@ MA_OPTS="${MA_OPTS:-Search_Type=mcts,Allow_Early_Stopping=false,Centi_Epsilon_Gr
 [[ -x "$MA" ]] || { echo "MultiAra wrapper not found at $MA"; exit 1; }
 
 nvidia-smi --query-gpu=name --format=csv,noheader
-echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS opening_plies=$OPENING_PLIES book=$BOOK"
+# Report only the opening source actually in effect: printing both
+# opening_plies and book reads as though plies were used when a book
+# overrides them.
+if [[ -n "$BOOK" ]]; then OPENINGS="openings=book:$BOOK"; else OPENINGS="openings=$OPENING_PLIES-random-plies"; fi
+echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS $OPENINGS"
 
 "$BUILD/examples/az_vs_sf" \
   --az_path="$RUN_DIR" \

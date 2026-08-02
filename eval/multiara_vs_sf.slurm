@@ -62,7 +62,8 @@ BOOK="${BOOK:-}"
 [[ -x "$MA" ]] || { echo "MultiAra wrapper not found at $MA"; exit 1; }
 [[ -x "$SF" ]] || { echo "Fairy-Stockfish 13.1 not found at $SF"; exit 1; }
 
-echo "[ma_vs_sf] ma_nodes=$MA_NODES sf_nodes=$SF_NODES games=$GAMES hash=${SF_HASH}MB book=$BOOK"
+if [[ -n "$BOOK" ]]; then OPENINGS="openings=book:$BOOK"; else OPENINGS="openings=random-plies(harness default)"; fi
+echo "[ma_vs_sf] ma_nodes=$MA_NODES sf_nodes=$SF_NODES games=$GAMES hash=${SF_HASH}MB $OPENINGS"
 date
 
 stdbuf -oL "$BIN" \
