@@ -63,6 +63,13 @@
 ABSL_FLAG(std::string, sf_path, "/opt/homebrew/bin/fairy-stockfish",
           "Fairy-Stockfish binary.");
 ABSL_FLAG(std::string, out, "atomic_sf", "Output prefix; .<shard>.tsv appended.");
+ABSL_FLAG(std::string, games_in, "",
+          "RELABEL MODE. Path to a .games file (az_vs_sf --dump_games format: "
+          "result_p0 TAB uci uci ...). Instead of generating SF-vs-SF games, "
+          "replay these and label every position with Stockfish, preserving "
+          "the moves actually played and the recorded result. This is the "
+          "DAgger step: it turns games OUR net played into training targets. "
+          "--games, --random_plies and --explore_prob are ignored.");
 ABSL_FLAG(int, games, 1000, "Games to generate in this shard.");
 ABSL_FLAG(int, label_nodes, 10000, "Nodes per position. Higher = better labels.");
 ABSL_FLAG(int, multipv, 4, "Top-N moves to record (1 = best move only).");
@@ -214,6 +221,104 @@ int main(int argc, char** argv) {
       << "# nodes=" << nodes << " multipv=" << multipv
       << " nnue=" << absl::GetFlag(FLAGS_use_nnue)
       << " explore_prob=" << explore << "\n";
+
+  // ---- RELABEL MODE -------------------------------------------------------
+  // Replay games we were given and label every position, rather than playing
+  // new ones. The moves and the result come from the input; only the targets
+  // are new. Sharding is by line, so N processes can split one file.
+  const std::string games_in = absl::GetFlag(FLAGS_games_in);
+  if (!games_in.empty()) {
+    std::ifstream in(games_in);
+    if (!in) {
+      std::cerr << "cannot open --games_in " << games_in << std::endl;
+      return 1;
+    }
+    int64_t line_no = 0, done = 0, positions = 0, bad_move = 0, bad_search = 0,
+            past_end = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (line.empty() || line[0] == '#') continue;
+      // Shard by data-line index so the split is deterministic and disjoint.
+      if ((line_no++ % std::max(1, absl::GetFlag(FLAGS_num_shards))) != shard)
+        continue;
+
+      const size_t tab = line.find('\t');
+      if (tab == std::string::npos) { ++bad_move; continue; }
+      const std::string result_field = line.substr(0, tab);
+
+      // Accept bare 'e2e4' (a --dump_games file) and 'e2e4|cp|...' (an already
+      // labelled file), so a set can be relabelled at different node counts.
+      std::vector<std::string> moves;
+      {
+        std::istringstream iss(line.substr(tab + 1));
+        std::string tok;
+        while (iss >> tok) {
+          const size_t bar = tok.find('|');
+          moves.push_back(bar == std::string::npos ? tok : tok.substr(0, bar));
+        }
+      }
+      if (moves.empty()) { ++bad_move; continue; }
+
+      sf.Restart();  // ucinewgame: no hash or history carried between games
+      std::unique_ptr<State> state = game->NewInitialState();
+      std::vector<std::string> plies;
+      bool ok = true;
+
+      for (const std::string& mv : moves) {
+        if (state->IsTerminal()) { ok = false; ++past_end; break; }
+        const auto& as = down_cast<atomic_chess::AtomicChessState&>(*state);
+        const Action a = UciToAction(as, mv);
+        // UciToAction only parses; ParseMove can return a Move the atomic rules
+        // reject, and ApplyAction on a non-legal action segfaults.
+        bool legal = false;
+        if (a != kInvalidAction) {
+          for (Action l : state->LegalActions()) {
+            if (l == a) { legal = true; break; }
+          }
+        }
+        if (!legal) { ok = false; ++bad_move; break; }
+
+        std::vector<PvEntry> pv = Search(&sf, as.Board().ToFEN(), nodes);
+        if (pv.empty()) { ok = false; ++bad_search; break; }
+
+        std::string mstr;
+        for (const PvEntry& e : pv) {
+          if (UciToAction(as, e.move) == kInvalidAction) continue;
+          if (!mstr.empty()) mstr += ",";
+          absl::StrAppend(&mstr, e.move, ":", e.cp);
+        }
+        // `played` is OUR move, which is usually NOT SF's best -- that
+        // disagreement is exactly the training signal DAgger is after.
+        plies.push_back(absl::StrCat(mv, "|", pv[0].cp, "|", mstr));
+        state->ApplyAction(a);
+      }
+
+      if (!ok || plies.empty()) continue;
+      out << result_field << '\t';
+      for (size_t i = 0; i < plies.size(); ++i) {
+        if (i) out << ' ';
+        out << plies[i];
+      }
+      out << '\n';
+      positions += static_cast<int64_t>(plies.size());
+      ++done;
+
+      if (absl::GetFlag(FLAGS_progress_every) > 0 &&
+          done % absl::GetFlag(FLAGS_progress_every) == 0) {
+        std::cerr << "[relabel " << shard << "] " << done << " games, "
+                  << positions << " positions" << std::endl;
+        out.flush();
+      }
+    }
+    out.flush();
+    std::cerr << "[relabel " << shard << "] DONE games=" << done
+              << " positions=" << positions << " dropped(bad_move=" << bad_move
+              << ", search=" << bad_search << ", past_end=" << past_end
+              << ") -> " << path << std::endl;
+    return 0;
+  }
+  // ---- end relabel mode ---------------------------------------------------
 
   std::mt19937 rng(1234567 + shard * 7919);
   std::uniform_real_distribution<double> unit(0.0, 1.0);
