@@ -157,7 +157,22 @@ inline open_spiel::Action StockfishMove(
     open_spiel::uci::UCIBot* sf,
     const open_spiel::atomic_chess::AtomicChessState& s,
     const std::string& go_cmd) {
-  sf->Position(s.Board().ToFEN());
+  // Send the start position PLUS the move history, not a bare FEN.
+  //
+  // A FEN cannot express how often a position has already occurred, and this
+  // matters more than it looks. MultiAra's input representation devotes two
+  // planes to repetition counts (Gehrke 2021 S4.2.1), and our own sf_label.cc
+  // records the same thing for our network: "the observation tensor has a
+  // repetition plane derived from history, so a FEN cannot reproduce it".
+  // Feeding a history-less FEN therefore hands a neural engine inputs it
+  // cannot compute correctly, and separately prevents it from matching the new
+  // position to its previous search tree.
+  //
+  // OpenSpiel provides this deliberately -- UCIBot has a
+  // use_game_history_for_position_ flag for exactly this reason.
+  const std::pair<std::string, std::vector<std::string>> fen_and_moves =
+      s.ExtractFenAndMaybeMoves();
+  sf->Position(fen_and_moves.first, fen_and_moves.second);
   sf->Write(go_cmd);
   std::string best;
   while (true) {
