@@ -38,6 +38,10 @@ SCRATCH="/u/${USER}/scratch"
 BUILD="${OPEN_SPIEL_BUILD:-$SCRATCH/open_spiel/build}"
 RUN_DIR="${RUN_DIR:-$SCRATCH/atomic_az/run_armA4}"
 MA="${MA:-$SCRATCH/multiara/multiara-uci}"
+# Label for the logs. MUST be set when MA is overridden -- the released RL
+# model and the supervised model are different networks and only the SL one
+# works, so a mislabelled log is worse than useless.
+MA_NAME="${MA_NAME:-MultiAra-RL-atomic-u25}"
 export LD_LIBRARY_PATH="${SCRATCH}/open_spiel/open_spiel/libtorch/libtorch/lib:${LD_LIBRARY_PATH:-}"
 mkdir -p "$SCRATCH/logs"
 
@@ -85,13 +89,13 @@ nvidia-smi --query-gpu=name --format=csv,noheader
 # opening_plies and book reads as though plies were used when a book
 # overrides them.
 if [[ -n "$BOOK" ]]; then OPENINGS="openings=book:$BOOK"; else OPENINGS="openings=$OPENING_PLIES-random-plies"; fi
-echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS $OPENINGS"
+echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS $OPENINGS opponent=$MA_NAME ma=$MA"
 
 "$BUILD/examples/az_vs_sf" \
   --az_path="$RUN_DIR" \
   --az_checkpoint="$CKPT" \
   --sf_path="$MA" \
-  --opponent_name="MultiAra-RL-atomic-u25" \
+  --opponent_name="$MA_NAME" \
   --sf_opt="$MA_OPTS" \
   --games="$GAMES" \
   --opening_plies="$OPENING_PLIES" \

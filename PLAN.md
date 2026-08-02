@@ -63,11 +63,62 @@ rate computed on exactly the positions scored.
 measured ceiling of 0.725) — no headroom there. **The policy head is not:**
 `policy_top1` of 0.41 means it disagrees with Stockfish on ~3 of 5 moves.
 
-**Measured, sims sweep** (on the *original* 16M arm A — worth redoing):
-13 / 8.8 / 10 / 11.2% at 200 / 400 / 800 / 1600 simulations.
+**Measured 2026-08-02, the strength ladder** — arm A4 at 1300 sims vs
+Fairy-Stockfish 13.1, classical evaluation, Hash=256MB, paired openings:
 
-**Measured, playing strength** (arm A original, vs Fairy-SF at 10k nodes,
-n=1200 paired): 62.1% as White, 41.0% as Black, **51.5% ± 2.8 overall**.
+| Fairy-SF nodes | book openings (n=200) | random 4-ply (n=400) |
+|---|---|---|
+| 10,000 | **80.8% ± 5.3** | 74.4% ± 4.1 |
+| 50,000 | **27.5% ± 5.8** | 32.9% ± 4.4 |
+| 200,000 | **6.8% ± 3.0** | 18.1% ± 3.6 |
+| 650,000 | **0.8% ± 0.8** | — |
+
+**Crossover ~25,000 nodes** under the book, ~26,000 under random openings. Two
+opening regimes agreeing makes that the citable strength anchor. This is the
+primary result and nothing below disturbs it.
+
+**The colour gap was mostly the opening protocol.** 27.7 / 30.2 / 27.3pp under
+random openings; 5.5 / 9.0 / −2.4pp under the book. Fairy-SF against *itself*
+shows 15–20pp from random openings alone. Earlier framing of this as a defect
+of our network was wrong.
+
+**Measured, sims sweep** (arm A4, vs Fairy-SF at 50k, n=80 each):
+24.4% at 400 sims, **35.0% at 800** — roughly **+88 Elo per doubling**. The
+original flat sweep (13/8.8/10/11.2%) was the *pre-retrain* net; search does
+convert on arm A4, so "the network is the bottleneck, not the search" no longer
+holds and the ladder at 1300 sims understates the model.
+
+### MultiAra: the released RL model does not work
+
+Five independent measurements, after matching engine version, evaluation,
+opening book, search budget, and move history:
+
+1. It scores **8.75%** (n=40) against **its own supervised predecessor**, where
+   Gehrke reports the RL model as **+150 Elo better**.
+2. Raw network, no search — on a won rook endgame (K+R vs bare k) it returns
+   **+9cp**, and on the mirrored lost one **−3cp**. The SL model returns
+   **+897** and **−803**.
+3. It evaluates the initial position at **+957cp**, where SL gives +102 and
+   Fairy-SF 13.1 gives +254 at depth 20 (true White edge: 55.7%).
+4. It does not improve from 1300 to 6400 nodes — the signature of a value head
+   carrying no rankable signal.
+5. It scores 40.2 / 16.7 / 9.0% on the ladder above, far under its published
+   parity claim.
+
+The value head is not saturated; it is *anti-correlated with reality* —
+confident on balanced positions, blind on decided ones. That pattern fits an
+input-layout mismatch: a near-empty endgame fills almost no planes, so a model
+reading shifted planes sees zeros. Both models receive the same 63-plane tensor
+through the same binary, and the SL model works perfectly through all of it.
+
+**Consequence: the ~82% head-to-head against the RL model is void**, not
+caveated. It measured a non-functioning network.
+
+**MultiAra-SL is the real opponent.** It is the supervised-initialised model
+from the same release (lichess games, Aug 2013 – Jul 2020), demonstrably
+working, and per §5.2 about 40 Elo below the published RL figure against
+Fairy-Stockfish. It is NOT "MultiAra" — that name means the RL model in the
+literature — so results must say "MultiAra's supervised model".
 
 **Datasets in hand** (measured, `$DATA`):
 
@@ -457,6 +508,63 @@ MultiAra's atomic RL stalled after 26 updates. Budget for that recurring, and do
 not let it block the paper.
 
 ---
+
+## Phase 5 — Beat MultiAra's supervised model
+
+The goal, stated plainly. Transitivity puts the gap at **~145 Elo**: SL beats
+the RL model by +410 (91.25%, n=40), we beat it by +265 (~82%), so SL sits
+roughly 145 Elo above us — about a **30% score**. Confirm against the direct
+match at n=200 before trusting that.
+
+Levers, ordered by Elo per unit of effort:
+
+### 5.1 More simulations — free, and already measured
+
++88 Elo per doubling on arm A4 (24.4% → 35.0% from 400 → 800 vs Fairy-SF@50k).
+Two more doublings would be ~+176 Elo, which alone exceeds the gap.
+
+⚠️ **The catch: equal-simulation matching means SL scales too.** What matters is
+*relative* scaling. Two facts suggest this favours us: our search converts at
++88/doubling, and the RL model from the same codebase was completely flat from
+1300 to 6400. If SL also scales poorly, raising the budget is pure gain.
+
+**→ Sweep the head-to-head over simulations before anything else.** 800 / 1600 /
+3200 / 6400 a side, ~80 games each. It is the cheapest possible test and it
+either wins outright or tells us the gap is structural.
+
+### 5.2 `uct_c` — untested, free
+
+Fixed at 2.0 throughout, never tuned for this network's value scale. Standard
+AlphaZero practice sweeps it; tens of Elo are typical. Costs only match time.
+
+### 5.3 More epochs — the policy head was still improving
+
+`policy_top1` rose 0.397 → 0.406 between step 259k and the epoch-4 boundary, so
+4 epochs was not convergence. MultiAra found 7 generalised better than 30.
+Cheap relative to a new architecture.
+
+### 5.4 Arm E — the larger network
+
+256x20, ~24M params, ~16h. The value head is pinned at the label ceiling
+(0.726 vs 0.725) but `policy_top1` sits at 0.41 with room, and policy is what
+MCTS consumes. Biggest single lever, highest cost. Do 5.1-5.3 first: if
+simulations and tuning close the gap, this is unnecessary.
+
+### 5.5 Arm D — phase-conditioned value targets
+
+No new data. Early-position evaluations explain ~5% of outcome variance at any
+`cp_scale` (S1.2), yet `sf_lambda=0.8` weights them at 80%. A phase-dependent
+scale or lambda fixes targets we already know are wrong.
+
+### Acceptance criteria
+
+- [ ] Direct match vs MultiAra-SL at n=200 establishes the actual gap
+- [ ] Simulation sweep of that match, 800 through 6400, ~80 games each
+- [ ] `uct_c` swept at the best simulation count
+- [ ] Report per-colour with intervals, book openings, and state the simulation
+      count — a score without it is uninterpretable (measured: the same match
+      moved 63.5% to 87.1% across opening regimes alone)
+- [ ] Any claim says "MultiAra's supervised model", never "MultiAra"
 
 ## What would falsify the plan
 
