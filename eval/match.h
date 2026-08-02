@@ -64,6 +64,8 @@ struct Tally {
 struct MatchResult {
   Tally as_white, as_black;
   int unfinished = 0, sf_failures = 0;
+  // Draws the game implementation misses (bare kings), adjudicated here.
+  int bare_king_draws = 0;
 
   Tally overall() const {
     Tally t;
@@ -169,16 +171,51 @@ inline open_spiel::Action StockfishMove(
   }
   if (best.empty() || best == "(none)" || best == "0000")
     return open_spiel::kInvalidAction;
+
+  // Match against the LEGAL moves rather than translating the engine's move and
+  // checking afterwards. MoveToAction aborts the process on a nonsensical move
+  // -- observed: MultiAra returned "h5f7" in a bare-kings position, and
+  // MoveToAction died with "Unexpected offset (54, 19)" before any legality
+  // check could run, taking the whole match with it. Comparing LAN strings
+  // over LegalActions can only ever fail closed.
+  const std::vector<open_spiel::Action> legal = s.LegalActions();
+  for (open_spiel::Action l : legal) {
+    if (open_spiel::chess::ActionToMove(l, s.Board()).ToLAN() == best) return l;
+  }
+  // Second pass through ParseMove, which normalises notation the engine may
+  // write differently (castling in particular). Still never translates the
+  // parsed move directly -- only its LAN form is compared.
   auto m = s.Board().ParseMove(best, /*chess960=*/false);
   if (!m.has_value()) return open_spiel::kInvalidAction;
-  const open_spiel::Action a =
-      open_spiel::chess::MoveToAction(*m, s.BoardSize());
-  // ParseMove can return a Move the atomic rules reject; ApplyAction on a
-  // non-legal action segfaults rather than raising.
-  for (open_spiel::Action l : s.LegalActions()) {
-    if (l == a) return a;
+  const std::string lan = m->ToLAN();
+  for (open_spiel::Action l : legal) {
+    if (open_spiel::chess::ActionToMove(l, s.Board()).ToLAN() == lan) return l;
   }
   return open_spiel::kInvalidAction;
+}
+
+// True when only the two kings remain.
+//
+// Lichess atomic calls this an immediate draw by insufficient material, and so
+// do Fairy-Stockfish and MultiAra -- but our atomic_chess implementation does
+// NOT: measured, a bare-kings position reports terminal=0 with 3 legal moves.
+// Left alone, such games shuffle to the ply cap and are then EXCLUDED as
+// unfinished rather than scored as draws, which silently removes a
+// non-random subset of games from every measurement. It also confuses the
+// opponents: MultiAra answered a bare-kings position with "h5f7", a move with
+// no piece behind it.
+//
+// The real fix belongs in the game implementation. This keeps the measurements
+// honest until then. Only the unambiguous case is handled -- in atomic, K+minor
+// vs K is NOT necessarily drawn, because explosions can still mate.
+inline bool BareKings(const open_spiel::atomic_chess::AtomicChessState& s) {
+  const std::string fen = s.Board().ToFEN();
+  int pieces = 0;
+  for (char c : fen) {
+    if (c == ' ') break;  // board field only
+    if (std::isalpha(static_cast<unsigned char>(c))) ++pieces;
+  }
+  return pieces == 2;
 }
 
 // Runs the match. `make_bot(seed)` supplies our side; the opponent is `sf`.
@@ -258,9 +295,11 @@ inline MatchResult RunMatch(
           tmp->ApplyAction(a);
         }
       }
+      bool bare_kings = false;
       while (!s->IsTerminal() && ply < cfg.max_plies) {
         const auto& as = open_spiel::down_cast<
             open_spiel::atomic_chess::AtomicChessState&>(*s);
+        if (BareKings(as)) { bare_kings = true; break; }
         const open_spiel::Player cur = s->CurrentPlayer();
         open_spiel::Action a;
         if (cur == our_seat) {
@@ -295,11 +334,16 @@ inline MatchResult RunMatch(
         ++ply;
       }
 
-      const bool finished = !broke && s->IsTerminal();
+      // A bare-kings position is a draw the game implementation does not
+      // recognise; treat it as a finished drawn game rather than letting it
+      // shuffle to the ply cap and be discarded as unfinished.
+      const bool finished = !broke && (s->IsTerminal() || bare_kings);
       if (on_result) {
-        on_result(finished ? s->Returns()[0] : 0.0, finished);
+        // result 0 for an adjudicated draw; the value hook only scores decisive
+        // games, so it will skip these.
+        on_result((finished && !bare_kings) ? s->Returns()[0] : 0.0, finished);
       }
-      if (dump && finished) {
+      if (dump && finished && !bare_kings) {
         *dump << s->Returns()[0] << "\t";
         for (size_t i = 0; i < uci_moves.size(); ++i) {
           if (i) *dump << " ";
@@ -309,7 +353,12 @@ inline MatchResult RunMatch(
       }
 
       std::string label;
-      if (broke || !s->IsTerminal()) {
+      if (bare_kings && !broke) {
+        Tally& t = (our_seat == kWhite) ? res.as_white : res.as_black;
+        t.draw++;
+        res.bare_king_draws += 1;
+        label = "draw*";  // insufficient material, adjudicated by the harness
+      } else if (broke || !s->IsTerminal()) {
         res.unfinished += 1;
         label = "UNFINISHED";
       } else {
@@ -338,6 +387,12 @@ inline void PrintResult(const MatchResult& res, const std::string& header) {
             << "as White : " << res.as_white.Report() << "\n"
             << "as Black : " << res.as_black.Report() << "\n"
             << "overall  : " << all.Report() << std::endl;
+  if (res.bare_king_draws > 0) {
+    std::cout << "adjudicated draws (bare kings, insufficient material): "
+              << res.bare_king_draws
+              << "  -- atomic_chess does not treat these as terminal"
+              << std::endl;
+  }
   if (res.unfinished > 0) {
     std::cout << "unfinished (EXCLUDED from the score): " << res.unfinished;
     if (res.sf_failures > 0)
