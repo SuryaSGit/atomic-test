@@ -45,27 +45,39 @@ GAMES="${GAMES:-400}"
 # Equal simulations for both sides. The whole point of the protocol.
 SIMS="${SIMS:-800}"
 CKPT="${CKPT:--1}"
+
+# Random plies per opening. THIS IS A REAL CONFOUND, not a detail. MultiAra's
+# own tournaments used opening BOOKS (<=5 plies of common lines from
+# ianfab/books); we use uniformly random legal moves, which in atomic produces
+# far wilder positions -- hence the 5- and 7-ply games in every run. Our
+# training data is built from random openings (mean 4 plies in the base set,
+# mean 10 in hard/) and MultiAra's is not, so the default setting tests us in
+# our home distribution and them outside theirs. OPENING_PLIES=2 is the control.
+OPENING_PLIES="${OPENING_PLIES:-4}"
 # Threads affects MultiAra's speed and, through virtual loss, introduces some
 # nondeterminism. Recorded rather than tuned.
 MA_THREADS="${MA_THREADS:-4}"
 
-# Reuse_Tree defaults to TRUE in the binary but Gehrke's own config sets it
-# False (Appendix C.1). Our harness sends a full `position fen` before every
-# move and `ucinewgame` between games, so a reused tree can go stale across
-# those jumps. Symptom observed: MultiAra competitive for ~8 pairs, then losing
-# 24 straight -- an engine degrading mid-match, not one being outplayed.
+# Reuse_Tree is left at the binary default (true). It was suspected of causing
+# mid-match degradation -- MultiAra looked competitive for ~8 pairs then lost 24
+# straight -- and Gehrke's own config sets it False (Appendix C.1). TESTED AND
+# DISPROVED: with reuse off the score was 83.6% (n=58) against 86.3% (n=40) with
+# it on, statistically identical, and the losing streak did not reappear. It was
+# variance. Reuse off also costs ~8x in speed, since MultiAra rebuilds its
+# search every move, so it stays on.
 #
-# The transitivity check makes this decisive. MultiAra is published as "about
-# even" with Fairy-SF 13.1 classical at ~2M nodes; we score 15.8% against that
-# engine at only 200k nodes. We should therefore LOSE to MultiAra heavily. A
-# measured 86% in our favour is not a result, it is a misconfiguration.
-MA_OPTS="${MA_OPTS:-Search_Type=mcts,Allow_Early_Stopping=false,Centi_Epsilon_Greedy=0,Reuse_Tree=false,Threads=${MA_THREADS}}"
+# The transitivity argument that motivated the check was itself overstated: it
+# assumed strength is one-dimensional, and in atomic at these search levels it
+# is not. Deep alpha-beta finds forced explosion sequences neither network sees,
+# so NN-vs-NN and NN-vs-searcher measure different things. Losing to Fairy-SF at
+# 200k while beating MultiAra at matched simulations is not a contradiction.
+MA_OPTS="${MA_OPTS:-Search_Type=mcts,Allow_Early_Stopping=false,Centi_Epsilon_Greedy=0,Threads=${MA_THREADS}}"
 
 [[ -x "$BUILD/examples/az_vs_sf" ]] || { echo "az_vs_sf not built"; exit 1; }
 [[ -x "$MA" ]] || { echo "MultiAra wrapper not found at $MA"; exit 1; }
 
 nvidia-smi --query-gpu=name --format=csv,noheader
-echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS"
+echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS opening_plies=$OPENING_PLIES"
 
 "$BUILD/examples/az_vs_sf" \
   --az_path="$RUN_DIR" \
@@ -74,6 +86,7 @@ echo "[multiara] run_dir=$RUN_DIR sims=$SIMS games=$GAMES threads=$MA_THREADS"
   --opponent_name="MultiAra-RL-atomic-u25" \
   --sf_opt="$MA_OPTS" \
   --games="$GAMES" \
+  --opening_plies="$OPENING_PLIES" \
   --sf_nodes="$SIMS" \
   --az_sims="$SIMS" \
   --device=/cuda:0 \
