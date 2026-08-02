@@ -188,6 +188,16 @@ inline MatchResult RunMatch(
         if (cur == our_seat) {
           if (on_our_position) on_our_position(*s, our_seat);
           a = bot->Step(*s);
+          // Our side is normally an MCTS bot that cannot fail, but it may also
+          // be a UCI engine (uci_vs_uci). ApplyAction on kInvalidAction
+          // segfaults rather than raising, so check here too.
+          if (a == open_spiel::kInvalidAction) {
+            std::cerr << "  !! our bot returned no usable move at "
+                      << as.Board().ToFEN() << std::endl;
+            res.sf_failures += 1;
+            broke = true;
+            break;
+          }
         } else {
           a = StockfishMove(sf, as, cfg.go_cmd);
           if (a == open_spiel::kInvalidAction) {
