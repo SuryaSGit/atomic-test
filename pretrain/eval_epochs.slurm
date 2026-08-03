@@ -17,13 +17,16 @@
 # Epochs are not monotone, and a checkpoint whose value head happens to be
 # biased will search badly no matter how good its policy looks.
 #
-# CPU on purpose -- inference only, so it costs nothing against the GPU quota.
+# GPU, because CPU is not viable here: a 256x20 resnet is ~1.5 GFLOPs per
+# position, so 60k positions is ~90 TFLOPs and takes 15-25 min per validation on
+# 12 cores. A first attempt at CPU died at the 2h wall having scored two epochs.
 #SBATCH --job-name=eval_epochs
 #SBATCH --partition=secondary
 #SBATCH --account=campusclusterusers
-#SBATCH --cpus-per-task=16
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=/u/%u/scratch/logs/%x-%j.out
 #SBATCH --error=/u/%u/scratch/logs/%x-%j.out
 
@@ -38,7 +41,14 @@ mkdir -p "$SCRATCH/logs"
 
 EPOCHS="${EPOCHS:-7}"
 CP_SCALE="${CP_SCALE:-1580}"
-VAL_SAMPLES="${VAL_SAMPLES:-60000}"
+# 20k is ample for RANKING checkpoints -- the differences that matter are
+# several points of policy_top1, not three decimal places.
+VAL_SAMPLES="${VAL_SAMPLES:-20000}"
+DEVICE="${DEVICE:-/cuda:0}"
+# The training log already prints teacher-holdout numbers at every epoch
+# boundary, so re-computing them here doubles the work for nothing. Set
+# WITH_TEACHER=1 to score both.
+WITH_TEACHER="${WITH_TEACHER:-0}"
 TEACHER_VAL="${TEACHER_VAL:-$SCRATCH/data/atomic.7.tsv}"
 OWNPLAY_VAL="${OWNPLAY_VAL:-$SCRATCH/data/t3_ownplay.tsv}"
 
@@ -48,7 +58,7 @@ OWNPLAY_VAL="${OWNPLAY_VAL:-$SCRATCH/data/t3_ownplay.tsv}"
 score() {  # score <checkpoint> <val_tsv>
   "$BIN" --path="$RUN_DIR" --epochs=0 --init_checkpoint="$1" \
          --val_sf_tsv="$2" --sf_cp_scale="$CP_SCALE" \
-         --val_samples="$VAL_SAMPLES" --device=/cpu:0 2>/dev/null \
+         --val_samples="$VAL_SAMPLES" --device="$DEVICE" 2>/dev/null \
   | awk '/policy_top1/ && /VALIDATE-ONLY/ {for(i=1;i<=NF;i++) if($i=="policy_top1") p=$(i+1)}
          /EDGE/        {for(i=1;i<=NF;i++) if($i=="EDGE") e=$(i+1)}
          /pred/        {for(i=1;i<=NF;i++) {if($i=="mean") m=$(i+1); if($i=="sd") s=$(i+1)}}
@@ -67,7 +77,11 @@ printf -- "-%.0s" {1..80}; echo
 for N in $(seq 1 "$EPOCHS"); do
   [[ -f "$RUN_DIR/checkpoint-$N.pt" ]] || continue
   printf "%-6s | " "$N"
-  [[ -s "$TEACHER_VAL" ]] && score "$N" "$TEACHER_VAL" || printf "%-33s" "(missing)"
+  if [[ "$WITH_TEACHER" == "1" ]]; then
+    [[ -s "$TEACHER_VAL" ]] && score "$N" "$TEACHER_VAL" || printf "%-33s" "(missing)"
+  else
+    printf "%-33s" "(see training log)"
+  fi
   printf " | "
   [[ -s "$OWNPLAY_VAL" ]] && score "$N" "$OWNPLAY_VAL" || printf "%-33s" "(missing)"
   echo
