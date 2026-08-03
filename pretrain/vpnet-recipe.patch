@@ -1,0 +1,69 @@
+diff --git a/open_spiel/algorithms/alpha_zero_torch/vpnet.cc b/open_spiel/algorithms/alpha_zero_torch/vpnet.cc
+index 0877caa6..c73c2c6e 100644
+--- a/open_spiel/algorithms/alpha_zero_torch/vpnet.cc
++++ b/open_spiel/algorithms/alpha_zero_torch/vpnet.cc
+@@ -274,8 +274,10 @@ VPNetModel::LossInfo VPNetModel::Learn(const std::vector<TrainInputs>& inputs) {
+       model_->losses(torch_train_inputs, torch_train_legal_mask,
+                      torch_policy_targets, torch_value_targets);
+ 
+-  torch::Tensor total_loss =
+-      torch_outputs[0] + torch_outputs[1] + torch_outputs[2];
++  // outputs are {policy, value, l2}; the l2 term is never reweighted.
++  torch::Tensor total_loss = policy_loss_weight_ * torch_outputs[0] +
++                             value_loss_weight_ * torch_outputs[1] +
++                             torch_outputs[2];
+ 
+   total_loss.backward();
+ 
+@@ -286,6 +288,17 @@ VPNetModel::LossInfo VPNetModel::Learn(const std::vector<TrainInputs>& inputs) {
+                   torch_outputs[2].item<float>());
+ }
+ 
++void VPNetModel::SetLearningRate(double learning_rate) {
++  for (auto& group : model_optimizer_.param_groups()) {
++    group.options().set_lr(learning_rate);
++  }
++}
++
++void VPNetModel::SetLossWeights(double policy_weight, double value_weight) {
++  policy_loss_weight_ = policy_weight;
++  value_loss_weight_ = value_weight;
++}
++
+ }  // namespace torch_az
+ }  // namespace algorithms
+ }  // namespace open_spiel
+diff --git a/open_spiel/algorithms/alpha_zero_torch/vpnet.h b/open_spiel/algorithms/alpha_zero_torch/vpnet.h
+index 008646af..67d0894f 100644
+--- a/open_spiel/algorithms/alpha_zero_torch/vpnet.h
++++ b/open_spiel/algorithms/alpha_zero_torch/vpnet.h
+@@ -123,6 +123,20 @@ class VPNetModel {
+   // Training: do one (batch) step of neural net training
+   LossInfo Learn(const std::vector<TrainInputs>& inputs);
+ 
++  // Set the optimizer learning rate. Needed to drive a schedule from the
++  // training loop: the LR is otherwise fixed at whatever the graph def was
++  // created with, and a constant rate is a poor recipe. MultiAra's supervised
++  // models (Gehrke 2021 S4.3.2) used a one-cycle schedule peaking at 0.35 with
++  // a 1e-5 floor, against our fixed 2e-4.
++  void SetLearningRate(double learning_rate);
++
++  // Weight the policy and value terms of the training loss. AlphaZero sums them
++  // equally, which spends trunk capacity on a value head that may already be at
++  // its label ceiling. Gehrke S4.3.2 used 0.99 policy / 0.01 value, citing
++  // overfitting; measured here, value accuracy was pinned at 0.726 against a
++  // 0.725 ceiling while policy_top1 sat at 0.41 and was still improving.
++  void SetLossWeights(double policy_weight, double value_weight);
++
+   std::string SaveCheckpoint(int step);
+   void LoadCheckpoint(int step);
+   void LoadCheckpoint(const std::string& path);
+@@ -149,6 +163,8 @@ class VPNetModel {
+   ModelConfig model_config_;
+   Model model_;
+   torch::optim::Adam model_optimizer_;
++  double policy_loss_weight_ = 1.0;
++  double value_loss_weight_ = 1.0;
+   torch::Device torch_device_;
+ };
+ 

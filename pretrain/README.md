@@ -134,6 +134,27 @@ if (${OPEN_SPIEL_BUILD_WITH_LIBTORCH})
 endif()
 ```
 
+**Apply the vpnet patch first.** `az_pretrain` calls `SetLossWeights()` and
+`SetLearningRate()`, which upstream OpenSpiel does not have -- AlphaZero sums the
+policy and value losses equally and fixes the learning rate at whatever the graph
+def carried. Both matter for distillation: measured on atomic, value accuracy is
+pinned at the label ceiling (0.726 vs 0.725) while policy_top1 sits at 0.41, so
+equal weighting spends trunk capacity on a head with no headroom; and a constant
+2e-4 is three orders of magnitude below the one-cycle peak used by the published
+MultiAra supervised models (Gehrke 2021 S4.3.2).
+
+The patch is kept HERE rather than committed to the open_spiel fork, so nothing
+in this project ever writes to that repository.
+
+```bash
+cd $SCRATCH/open_spiel && git apply --check $AZ/pretrain/vpnet-recipe.patch \
+  && git apply $AZ/pretrain/vpnet-recipe.patch
+```
+
+`--check` first: applying twice fails noisily, but a half-applied patch is worse.
+If it reports the patch is already applied, skip it. Leave the change uncommitted
+in that tree.
+
 ```bash
 cd $SCRATCH/open_spiel/build && make -j az_pretrain
 ```
